@@ -1193,20 +1193,20 @@
     ].join('');
     const pubs = Array.isArray(rec.publications_openalex) ? rec.publications_openalex : [];
     const pubRows = pubs.length
-      ? '<ol class="pub-list">' + pubs.map(w =>
+      ? '<ol class="pub-list">' + withShowAll(pubs.map(w =>
           '<li>' + esc((w.authors || []).slice(0, 4).join(', ') + ((w.authors || []).length > 4 ? ' et al.' : '')) + (w.year ? ' (' + esc(String(w.year)) + '). ' : '. ')
           + '<em>' + esc(w.title || '') + '</em>' + (w.venue ? '. ' + esc(w.venue) : '')
           + (w.doi ? '. <a target="_blank" rel="noopener" href="' + esc(w.doi) + '">' + esc(w.doi) + '</a>' : (w.landing_page ? '. <a target="_blank" rel="noopener" href="' + esc(w.landing_page) + '">link</a>' : ''))
-          + ' <span class="muted">[mentioned in ' + esc(w.matched_on || 'abstract') + ']</span></li>').join('') + '</ol>'
+          + ' <span class="muted">[mentioned in ' + esc(w.matched_on || 'abstract') + ']</span></li>'), 5, '') + '</ol>'
         + (rec.publications_openalex_count > pubs.length ? '<p class="muted">' + esc(String(rec.publications_openalex_count - pubs.length)) + ' more in the data file.</p>' : '')
       : '<p class="muted">No OpenAlex publication mentions found for this variety name.</p>';
     const spubs = Array.isArray(rec.publications_scholar) ? rec.publications_scholar : [];
     const spubRows = spubs.length
-      ? '<ol class="pub-list">' + spubs.map(w =>
+      ? '<ol class="pub-list">' + withShowAll(spubs.map(w =>
           '<li>' + (w.publication_info ? esc(w.publication_info) + '. ' : '') + '<em>' + esc(w.title || '') + '</em>'
           + (w.link ? ' <a target="_blank" rel="noopener" href="' + esc(w.link) + '">link</a>' : '')
           + (w.cited_by ? ' <span class="muted">(cited by ' + esc(String(w.cited_by)) + ')</span>' : '')
-          + ' <span class="muted">[name in ' + esc(w.matched_on || 'snippet') + ']</span></li>').join('') + '</ol>'
+          + ' <span class="muted">[name in ' + esc(w.matched_on || 'snippet') + ']</span></li>'), 5, '') + '</ol>'
         + (rec.publications_scholar_count > spubs.length ? '<p class="muted">' + esc(String(rec.publications_scholar_count - spubs.length)) + ' more in the data file.</p>' : '')
       : '<p class="muted">No Google Scholar hits mentioning this variety name in the 2025 search results.</p>';
     const os_ = rec.official_sources || {};
@@ -1226,6 +1226,24 @@
       detailRow('Head / director', ic.head_or_director), detailRow('Seed or variety enquiries', ic.variety_or_seed_contact),
       detailRowHtml('Sources', (ic.source_urls || []).map(u => '<a target="_blank" rel="noopener" href="' + esc(u) + '">' + esc(u) + '</a>').join('<br>'))
     ].join('') : '<div class="field-row"><dd class="field-row__value field-row__value--muted">No institution-level contact found yet.</dd></div>';
+    const srcUrls = (function () {
+      const urls = []; const seen = {};
+      const push = u => { if (u && typeof u === 'string' && u.indexOf('http') === 0 && !seen[u]) { seen[u] = 1; urls.push(u); } };
+      const st = (((rec.research_data || {}).full_analysis_result || {}).stress_tolerance) || {};
+      Object.keys(st).forEach(k => ((st[k] || {}).evidence_sources || []).forEach(push));
+      ['genetics_and_qtl', 'agronomic_performance', 'breeder_and_contacts', 'commercial_availability'].forEach(k => ((((rec.research_data || {}).full_analysis_result || {})[k] || {}).evidence_sources || []).forEach(push));
+      (((rec.research_data || {}).full_analysis_result || {}).reference_links || []).forEach(push);
+      (rec.direct_source_links || []).forEach(push);
+      return urls;
+    })();
+    function srcLabel(u) { try { const x = new URL(u); const p = x.pathname.replace(/\/+$/, ''); const last = decodeURIComponent(p.split('/').filter(Boolean).pop() || '').replace(/[-_]+/g, ' ').replace(/\.(pdf|html?|aspx|php)$/i, ''); return { host: x.hostname.replace(/^www\./, ''), title: last ? last.slice(0, 80) : x.hostname }; } catch (e) { return { host: u, title: u }; } }
+    function withShowAll(items, n, label) {
+      if (!items.length) return '<p class="muted">' + esc(label) + '</p>';
+      const head = items.slice(0, n).join(''); const rest = items.slice(n).join('');
+      return head + (rest ? '<details class="more"><summary>Show all ' + items.length + '</summary>' + rest + '</details>' : '');
+    }
+    const sourceItems = srcUrls.map(u => { const l = srcLabel(u); return '<li><a target="_blank" rel="noopener" href="' + esc(u) + '">' + esc(l.title) + '</a> <span class="muted">' + esc(l.host) + '</span></li>'; });
+    const sourcesBlock = '<ol class="src-list">' + withShowAll(sourceItems, 6, 'No source URLs in the research summary.') + '</ol>';
     const commercialRows = [
       detailRow('Seed Corporations', com.seed_corporations),
       detailRow('Availability Status', com.availability_status),
@@ -1267,25 +1285,9 @@
       +       (rec._dtm_raw ? esc(rec._dtm_raw) : '<span class="muted">—</span>')
       +     '</p>'
       +   '</div>'
-      +   '<div class="research-card">'
-      +     '<h3 class="research-card__h">Sources</h3>'
-      +     '<p class="research-card__body">'
-      +       (function () {
-                const urls = [];
-                const seen = {};
-                const push = u => { if (u && typeof u === 'string' && u.indexOf('http') === 0 && !seen[u]) { seen[u] = 1; urls.push(u); } };
-                const st = (((rec.research_data || {}).full_analysis_result || {}).stress_tolerance) || {};
-                Object.keys(st).forEach(k => ((st[k] || {}).evidence_sources || []).forEach(push));
-                ['genetics_and_qtl', 'agronomic_performance', 'breeder_and_contacts', 'commercial_availability'].forEach(k => ((((rec.research_data || {}).full_analysis_result || {})[k] || {}).evidence_sources || []).forEach(push));
-                (((rec.research_data || {}).full_analysis_result || {}).reference_links || []).forEach(push);
-                (rec.direct_source_links || []).forEach(push);
-                const pubs = (Number(rec.publications_scholar_count) || 0) + (Number(rec.publications_openalex_count) || 0);
-                return (urls.length ? urls.slice(0, 12).map(u => '<a target="_blank" rel="noopener" href="' + esc(u) + '">' + esc(u.replace(/^https?:\/\//, '').slice(0, 60)) + '</a>').join('<br>') + (urls.length > 12 ? '<br><span class="muted">+' + (urls.length - 12) + ' more below</span>' : '') : '<span class="muted">No source URLs in the research summary.</span>')
-                  + '<br><span class="muted">' + pubs + ' publication mention' + (pubs === 1 ? '' : 's') + ' listed below · ' + esc(String(resultsSummary != null ? resultsSummary : 0)) + ' search results</span>';
-              })()
-      +     '</p>'
-      +   '</div>'
       + '</div>'
+      + '<h3 class="research-card__h research-card__h--block">Sources (' + srcUrls.length + ')</h3>'
+      + sourcesBlock
       + '<h3 class="research-card__h research-card__h--block">Detailed stress evidence</h3>'
       + '<dl class="field-grid">' + stressRows + '</dl>'
       + '<h3 class="research-card__h research-card__h--block">Agronomic details</h3>'
