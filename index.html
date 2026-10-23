@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Stress-Tolerant Seed Varieties Dashboard for India — a reference catalogue combining Seednet (Government of India) variety records with curated research evidence." />
+  <title>Stress-Tolerant Seed Varieties of India — Precision Development</title>
+  <link rel="icon" href="PxD_logo.png" type="image/png" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!--
+    Layout intent: a single column app shell with a sticky brand header,
+    KPI strip, filter card, table card, and a portal-rendered modal layer.
+    All interactive controls expose stable IDs that script.js binds to;
+    no markup carries data values — everything inside data regions starts
+    empty/aria-busy and is hydrated after fetch().
+  -->
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="app-header" role="banner">
+    <div class="container app-header__inner">
+      <div class="app-header__brand">
+        <img src="PxD_logo.png" alt="Precision Development logo" class="app-header__logo" />
+        <div class="app-header__titles">
+          <h1 class="app-header__title">India's Seed Varieties Dashboard</h1>
+          <p class="app-header__subtitle">Stress-tolerant seed variety identification · Precision Development</p>
+        </div>
+      </div>
+      <nav class="app-header__nav" aria-label="Primary actions">
+        <button id="btn-reload" class="btn btn--ghost" type="button" aria-label="Reload data from JSON source">
+          <span aria-hidden="true">↻</span> Reload Data
+        </button>
+        <button id="btn-about" class="btn btn--ghost" type="button" aria-haspopup="dialog">About</button>
+        <a id="link-github" class="btn btn--ghost" href="https://github.com/kushal-satya/pxd-sts-dashboard" target="_blank" rel="noopener" aria-label="Open GitHub repository">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="container" role="main">
+    <!-- KPIs: values populated by script.js after fetch; aria-busy until then. -->
+    <section class="kpi-strip" aria-label="Dataset summary">
+      <article class="kpi-card">
+        <span class="kpi-card__label">Varieties</span>
+        <span class="kpi-card__value" id="kpi-total" aria-busy="true">—</span>
+      </article>
+      <article class="kpi-card">
+        <span class="kpi-card__label">Stress tolerant (search hits)</span>
+        <span class="kpi-card__value" id="kpi-stress" aria-busy="true">—</span>
+      </article>
+        <article class="kpi-card">
+          <span class="kpi-card__label">Stress tolerant (evidence-based)</span>
+          <span class="kpi-card__value" id="kpi-stress-strict" aria-busy="true">—</span>
+        </article>
+        <article class="kpi-card">
+          <span class="kpi-card__label">With publications</span>
+          <span class="kpi-card__value" id="kpi-pubs" aria-busy="true">—</span>
+        </article>
+      <article class="kpi-card">
+        <span class="kpi-card__label">High search coverage</span>
+        <span class="kpi-card__value" id="kpi-high-ev" aria-busy="true">—</span>
+      </article>
+      <article class="kpi-card">
+        <span class="kpi-card__label">Crops</span>
+        <span class="kpi-card__value" id="kpi-crops" aria-busy="true">—</span>
+      </article>
+    </section>
+
+    <!--
+      Error banner: hidden by default; script.js shows it on fetch failure
+      and wires the inline retry button. Kept inside flow (not absolute) so
+      it pushes content down and remains screen-reader-discoverable.
+    -->
+    <div id="error-banner" class="error-banner" role="alert" hidden>
+      <div class="error-banner__icon" aria-hidden="true">!</div>
+      <div class="error-banner__body">
+        <p class="error-banner__title">Unable to load dataset</p>
+        <p class="error-banner__detail" id="error-banner-detail"></p>
+      </div>
+      <button id="btn-retry" type="button" class="btn btn--primary">Retry</button>
+      <button id="btn-error-dismiss" type="button" class="error-banner__close" aria-label="Dismiss error">×</button>
+    </div>
+
+    <section class="card filter-card" aria-label="Filters">
+      <header class="filter-card__head">
+        <h2 class="card__title">Filters</h2>
+        <button id="btn-reset" type="button" class="btn btn--secondary">Reset filters</button>
+      </header>
+
+      <div class="filter-card__search">
+        <label class="visually-hidden" for="filter-search">Search varieties</label>
+        <input id="filter-search" type="search" class="input input--search"
+               placeholder="Search variety name, crop, attributes, or state code…"
+               autocomplete="off" inputmode="search" />
+      </div>
+
+      <!--
+        Six multi-select filters + two year inputs. Options are NOT in markup;
+        script.js fills them from the live data so that the dashboard can never
+        offer a value the dataset doesn't actually contain.
+      -->
+      <div class="filter-grid">
+        <div class="filter-group">
+          <label for="filter-crop">Crop</label>
+          <select id="filter-crop" multiple size="6" aria-describedby="hint-multi"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-state">State</label>
+          <select id="filter-state" multiple size="6" aria-describedby="hint-multi"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-stress-tol">Stress Tolerance</label>
+          <select id="filter-stress-tol" multiple size="3" aria-describedby="hint-multi"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-evidence">Evidence Quality</label>
+          <select id="filter-evidence" multiple size="3" aria-describedby="hint-multi"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-stress-type">Stress Type</label>
+          <select id="filter-stress-type" multiple size="6" aria-describedby="hint-multi"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-source">Data Source</label>
+          <select id="filter-source" multiple size="3" aria-describedby="hint-multi"></select>
+        </div>
+        <div class="filter-group filter-group--year">
+          <span class="filter-group__legend">Year of Release</span>
+          <div class="filter-year-row">
+            <label class="visually-hidden" for="filter-year-min">Year from</label>
+            <input id="filter-year-min" type="number" class="input input--year" placeholder="From" inputmode="numeric" />
+            <span class="filter-year-row__sep" aria-hidden="true">–</span>
+            <label class="visually-hidden" for="filter-year-max">Year to</label>
+            <input id="filter-year-max" type="number" class="input input--year" placeholder="To" inputmode="numeric" />
+          </div>
+        </div>
+      </div>
+      <p id="hint-multi" class="filter-hint">Hold Ctrl (Windows) or Command (macOS) to select multiple values. Leaving a list empty applies no filter on that dimension.</p>
+    </section>
+
+    <section class="result-bar" aria-live="polite">
+      <span id="result-count" class="result-bar__count">Loading…</span>
+      <span class="result-bar__meta">
+        Last updated: <time id="last-updated" datetime="">—</time>
+      </span>
+    </section>
+
+    <section class="card table-card">
+      <div class="table-controls">
+        <div class="table-controls__group">
+          <div class="dropdown" id="columns-wrap">
+            <button id="btn-columns" type="button" class="btn btn--secondary"
+                    aria-haspopup="true" aria-expanded="false" aria-controls="columns-menu">
+              Columns ▾
+            </button>
+            <!-- Column toggles are generated by script.js so the labels and
+                 keys stay in lock-step with renderTable's column registry. -->
+            <div id="columns-menu" class="dropdown__menu" role="menu" hidden></div>
+          </div>
+          <button id="btn-export-csv" type="button" class="btn btn--secondary">Export CSV</button>
+        </div>
+        <div class="table-controls__group">
+          <label class="page-size-label" for="select-page-size">Rows per page</label>
+          <select id="select-page-size" class="input input--page-size">
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="table-scroll" role="region" aria-label="Varieties table" tabindex="0">
+        <table id="tbl-varieties" class="data-table">
+          <!-- thead and tbody are rendered by script.js so column visibility,
+               aria-sort state, and sort indicators stay synchronised. -->
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="pagination" aria-label="Pagination">
+        <button id="btn-prev" type="button" class="btn btn--ghost" disabled>← Previous</button>
+        <span id="page-info" class="pagination__info">Page 1 of 1</span>
+        <button id="btn-next" type="button" class="btn btn--ghost" disabled>Next →</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer" role="contentinfo">
+    <div class="container app-footer__inner">
+      <ul class="legend" aria-label="Data source legend">
+        <li><span class="legend__dot legend__dot--seednet" aria-hidden="true"></span> Seednet Available</li>
+        <li><span class="legend__dot legend__dot--research" aria-hidden="true"></span> Research Enhanced</li>
+      </ul>
+      <p class="app-footer__credit">Sources: Seednet (Government of India), CSC release minutes, Gazette notifications · Research summaries: Google Gemini (Aug 2025) and Anthropic Claude (Oct 2026) · Publications: Google Scholar (SerpAPI, 2025), OpenAlex</p>
+      <p class="app-footer__copy">© Precision Development — Stress-Tolerant Seed Varieties initiative</p>
+    </div>
+  </footer>
+
+  <!-- Loading overlay sits above content but below the modal layer. -->
+  <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite" aria-label="Loading data">
+    <div class="loading-overlay__spinner" aria-hidden="true"></div>
+    <p class="loading-overlay__text">Loading dataset…</p>
+  </div>
+
+  <!--
+    Modal: a single shell that renders both the variety dual-tab view and
+    the About content. Script.js swaps body via data-mode and manages
+    focus trap + Escape close + backdrop click. Hidden via [hidden] so
+    keyboard navigation skips it when closed.
+  -->
+  <div id="detail-modal" class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="modal-title" hidden>
+    <div class="modal__backdrop" data-modal-close></div>
+    <div class="modal__panel" role="document">
+      <header class="modal__head">
+        <h2 id="modal-title" class="modal__title">—</h2>
+        <button id="modal-close" type="button" class="modal__close"
+                aria-label="Close dialog" data-modal-close>×</button>
+      </header>
+      <div id="modal-meta" class="modal__meta"></div>
+      <div id="modal-tabs" class="modal__tabs" role="tablist"></div>
+      <div id="modal-body" class="modal__body"></div>
+    </div>
+  </div>
+
+  <script src="./script.js?v=final_hyperlinks_20260427_2" defer></script>
+</body>
+</html>
