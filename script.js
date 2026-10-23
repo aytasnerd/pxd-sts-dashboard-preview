@@ -372,7 +372,10 @@
 
     rec.stress_tolerance_strict = (r.stress_tolerance_strict === 'Yes' || r.stress_tolerance_strict === 'No' || r.stress_tolerance_strict === 'Unknown') ? r.stress_tolerance_strict : '';
     rec.stress_types_strict = Array.isArray(r.stress_types_strict) ? r.stress_types_strict : [];
-    rec.developer_institution_csc = r.developer_institution_csc || ''; rec.developer_location_csc = r.developer_location_csc || '';
+    rec.developer_institution_csc = r.developer_institution_csc || '';
+    const _cs = r.contacts_structured || {};
+    rec.institution_std = String(_cs.institution || r.developer_institution_csc || '').trim();
+    rec.has_contact = ((_cs.emails || []).length || (_cs.phones || []).length || (_cs.breeder_names || []).length) ? 'Yes' : 'No'; rec.developer_location_csc = r.developer_location_csc || '';
     rec.publications_count = (Number(r.publications_scholar_count) || 0) + (Number(r.publications_openalex_count) || 0);
     rec.enrichment_wave = r.enrichment_wave ? String(r.enrichment_wave).replace('enhanced_v2.1_20250808', 'Aug 2025 (Gemini)').replace(/enhanced_v3\.\d_20261022_claude/, 'Oct 2026 (Claude)') : '';
     rec.evidence_quality = (r.evidence_quality === 'High' || r.evidence_quality === 'Medium'
@@ -432,7 +435,8 @@
   function buildVocabularies() {
     STATE.meta.vocab.crops = uniqSorted(STATE.all.map(r => r._crop_norm || r.crop));
     STATE.meta.vocab.states = uniqSorted(STATE.all.flatMap(r => r._state_norm_tokens));
-    STATE.meta.vocab.stressTypes = uniqSorted(STATE.all.flatMap(r => r.stress_types));
+    STATE.meta.vocab.stressTypes = uniqSorted(STATE.all.flatMap(r => (r.stress_types_strict && r.stress_types_strict.length) ? r.stress_types_strict : []));
+    STATE.meta.vocab.institutions = uniqSorted(STATE.all.map(r => r.institution_std).filter(Boolean));
   }
 
   /* ------------------------------------------------------------------ *
@@ -446,6 +450,8 @@
     fillSelect('filter-evidence', STATE.meta.vocab.evidences);
     fillSelect('filter-stress-type', STATE.meta.vocab.stressTypes);
     fillSelect('filter-source', STATE.meta.vocab.sources);
+    fillSelect('filter-institution', STATE.meta.vocab.institutions);
+    fillSelect('filter-contact', ['Yes', 'No']);
 
     // Seed the year-range placeholders with the actual min/max so users
     // know the legitimate bounds without us having to label them inline.
@@ -488,6 +494,8 @@
     const evidences = getSelectedMulti('filter-evidence');
     const stressTypes = getSelectedMulti('filter-stress-type');
     const sources = getSelectedMulti('filter-source');
+    const institutions = getSelectedMulti('filter-institution');
+    const contacts = getSelectedMulti('filter-contact');
     const yMin = parseInt($('filter-year-min').value, 10);
     const yMax = parseInt($('filter-year-max').value, 10);
     const yMinSet = Number.isFinite(yMin);
@@ -518,11 +526,13 @@
       // 5. Evidence quality.
       if (evidences.length && evidences.indexOf(r.evidence_quality) === -1) return false;
       // 6. Stress type (any match).
-      if (stressTypes.length && !r.stress_types.some(t => stressTypes.indexOf(t) !== -1)) return false;
+      if (stressTypes.length && !stressTypes.some(t => (r.stress_types_strict || []).indexOf(t) !== -1)) return false;
       // 7. Source: 'Seednet' and 'Both' both require seednet_available;
       //    'Research Only' requires the negation. The OR-within-group
       //    semantics is preserved across multi-select.
       if (sources.length) {
+      if (institutions.length && institutions.indexOf(r.institution_std) === -1) return false;
+      if (contacts.length && contacts.indexOf(r.has_contact) === -1) return false;
         let pass = false;
         for (let i = 0; i < sources.length; i++) {
           const s = sources[i];
@@ -555,6 +565,7 @@
       if (el) Array.from(el.options).forEach(o => o.selected = false);
     });
     $('filter-search').value = '';
+    ['filter-institution', 'filter-contact'].forEach(id => { const el = $(id); if (el) el.value = ''; });
     $('filter-year-min').value = '';
     $('filter-year-max').value = '';
     STATE.sort = { key: null, dir: 'asc' };
@@ -567,6 +578,7 @@
    * ------------------------------------------------------------------ */
 
   function renderKPIs() {
+    const ac = $('about-count'); if (ac) ac.textContent = STATE.all.length.toLocaleString();
     const all = STATE.all;
     const total = all.length;
     const stressYes = all.filter(r => r.stress_tolerance === 'Yes').length;
