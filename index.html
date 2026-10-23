@@ -102,11 +102,11 @@
       <div class="filter-grid">
         <div class="filter-group">
           <label for="filter-crop">Crop</label>
-          <select id="filter-crop" multiple size="6" aria-describedby="hint-multi"></select>
+          <select id="filter-crop" class="input"></select>
         </div>
         <div class="filter-group">
           <label for="filter-state">State</label>
-          <select id="filter-state" multiple size="6" aria-describedby="hint-multi"></select>
+          <select id="filter-state" class="input"></select>
         </div>
         <div class="filter-group">
           <label for="filter-stress-tol">Stress Tolerance</label>
@@ -135,7 +135,7 @@
           </div>
         </div>
       </div>
-      <p id="hint-multi" class="filter-hint">Hold Ctrl (Windows) or Command (macOS) to select multiple values. Leaving a list empty applies no filter on that dimension.</p>
+      <p id="hint-multi" class="filter-hint">Crop and State are single-choice (All = no filter). For the other lists hold Ctrl (Windows) or Command (macOS) to select several values; an empty list applies no filter.</p>
     </section>
 
     <section class="result-bar" aria-live="polite">

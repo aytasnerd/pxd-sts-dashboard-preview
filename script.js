@@ -460,17 +460,18 @@
     const el = $(id);
     if (!el) return;
     if (id === 'filter-state') {
-      el.innerHTML = values
-        .map(v => '<option value="' + esc(v) + '">' + esc(v + ' — ' + (STATE_CODE_TO_NAME[v] || v)) + '</option>')
+      el.innerHTML = (el.multiple ? '' : '<option value="">All</option>') + values
+        .map(v => '<option value="' + esc(v) + '">' + esc((STATE_CODE_TO_NAME[v] || v) + ' (' + v + ')') + '</option>')
         .join('');
       return;
     }
-    el.innerHTML = values.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+    const allOpt = el.multiple ? '' : '<option value="">All</option>';
+    el.innerHTML = allOpt + values.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
   }
 
   function getSelectedMulti(id) {
     const el = $(id);
-    return el ? Array.from(el.selectedOptions).map(o => o.value) : [];
+    return el ? Array.from(el.selectedOptions).map(o => o.value).filter(v => v !== '') : [];
   }
 
   /* ------------------------------------------------------------------ *
@@ -923,9 +924,11 @@
   function renderModalTabs(rec) {
     const tabs = [];
     if (rec._has_seednet) {
-      tabs.push({ id: 'seednet', label: 'Official Seednet Data', badge: 'OFFICIAL SOURCE' });
+      tabs.push({ id: 'seednet', label: 'Seednet record', badge: 'Govt of India portal' });
     }
-    tabs.push({ id: 'research', label: 'Research & Analysis', badge: 'AI-ENHANCED RESEARCH' });
+    const pm = (((rec.research_data || {}).full_analysis_result || {}).processing_metadata) || {};
+    const provenance = [pm.model || (rec.enrichment_wave && rec.enrichment_wave.indexOf('Gemini') !== -1 ? 'gemini-2.5-flash' : ''), pm.analysis_date ? String(pm.analysis_date).slice(0, 10) : '', (rec.search_metadata && rec.search_metadata.total_queries) ? rec.search_metadata.total_queries + ' searches' : ''].filter(Boolean).join(' · ');
+    tabs.push({ id: 'research', label: 'Research & evidence', badge: provenance || 'research summary' });
 
     const tabBar = $('modal-tabs');
     tabBar.innerHTML = tabs.map(t =>
@@ -1013,7 +1016,7 @@
 
     return '<section class="tab-panel tab-panel--seednet" role="tabpanel">'
       + '<div class="tab-panel__head">'
-      +   '<span class="badge-banner badge-banner--seednet">OFFICIAL SOURCE</span>'
+XX
       +   (portalUrl
           ? '<a class="btn btn--seednet" href="' + esc(portalUrl) + '" target="_blank" rel="noopener">'
               + 'View on Seednet Portal ↗</a>'
@@ -1163,10 +1166,14 @@
 
     const far = rd.full_analysis_result || {};
     const bc = far.breeder_and_contacts || {};
+    const cs = rec.contacts_structured || {};
     const breederRows = [
-      detailRow('Breeder / scientist', bc.breeder),
+      detailRow('Breeder / scientist name(s)', (cs.breeder_names || []).join('; ') || bc.breeder),
+      detailRow('Email(s)', (cs.emails || []).join(', ')),
+      detailRow('Phone(s)', (cs.phones || []).join(', ')),
+      detailRow('Postal address', (cs.addresses || []).join('; ')),
       detailRow('Institution', firstNonEmpty(bc.institution, sf['Institution Responsible for developing Breeder Seed'], rec.developer_institution_csc)),
-      detailRow('Contact details', bc.contacts),
+      detailRow('Contact notes (as found)', bc.contacts),
       detailRow('Publications (from search evidence)', bc.publications),
       detailRowHtml('Evidence sources', Array.isArray(bc.evidence_sources) && bc.evidence_sources.length
         ? bc.evidence_sources.map(u => '<a target="_blank" rel="noopener" href="' + esc(u) + '">' + esc(u) + '</a>').join('<br>') : '')
@@ -1215,8 +1222,7 @@
 
     return '<section class="tab-panel tab-panel--research" role="tabpanel">'
       + '<div class="tab-panel__head">'
-      +   '<span class="badge-banner badge-banner--research">AI-ENHANCED RESEARCH</span>'
-      + '</div>'
+XX
       + '<div class="research-grid">'
       +   '<div class="research-card">'
       +     '<h3 class="research-card__h">Key attributes</h3>'
@@ -1248,13 +1254,22 @@
       +     '</p>'
       +   '</div>'
       +   '<div class="research-card">'
-      +     '<h3 class="research-card__h">Research coverage</h3>'
+      +     '<h3 class="research-card__h">Sources</h3>'
       +     '<p class="research-card__body">'
-      +       'Search results: <strong>' + esc(resultsSummary != null ? String(resultsSummary) : '0') + '</strong>'
-      +       ' · Field-trial hits: <strong>' + esc(fieldTrials != null ? String(fieldTrials) : '0') + '</strong>'
-      +       ' · Commercial-search hits: <strong>' + esc(commercialSearches != null ? String(commercialSearches) : '0') + '</strong>'
+      +       (function () {
+                const urls = [];
+                const seen = {};
+                const push = u => { if (u && typeof u === 'string' && u.indexOf('http') === 0 && !seen[u]) { seen[u] = 1; urls.push(u); } };
+                const st = (((rec.research_data || {}).full_analysis_result || {}).stress_tolerance) || {};
+                Object.keys(st).forEach(k => ((st[k] || {}).evidence_sources || []).forEach(push));
+                ['genetics_and_qtl', 'agronomic_performance', 'breeder_and_contacts', 'commercial_availability'].forEach(k => ((((rec.research_data || {}).full_analysis_result || {})[k] || {}).evidence_sources || []).forEach(push));
+                (((rec.research_data || {}).full_analysis_result || {}).reference_links || []).forEach(push);
+                (rec.direct_source_links || []).forEach(push);
+                const pubs = (Number(rec.publications_scholar_count) || 0) + (Number(rec.publications_openalex_count) || 0);
+                return (urls.length ? urls.slice(0, 12).map(u => '<a target="_blank" rel="noopener" href="' + esc(u) + '">' + esc(u.replace(/^https?:\/\//, '').slice(0, 60)) + '</a>').join('<br>') + (urls.length > 12 ? '<br><span class="muted">+' + (urls.length - 12) + ' more below</span>' : '') : '<span class="muted">No source URLs in the research summary.</span>')
+                  + '<br><span class="muted">' + pubs + ' publication mention' + (pubs === 1 ? '' : 's') + ' listed below · ' + esc(String(resultsSummary != null ? resultsSummary : 0)) + ' search results</span>';
+              })()
       +     '</p>'
-      +   '</div>'
       + '</div>'
       + '<h3 class="research-card__h research-card__h--block">Detailed stress evidence</h3>'
       + '<dl class="field-grid">' + stressRows + '</dl>'
