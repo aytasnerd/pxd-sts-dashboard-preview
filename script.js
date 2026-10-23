@@ -763,10 +763,9 @@
         // available as title text for accessibility/discovery.
         const full = (r.states_full || []).join(', ');
         const code = r.states_acronyms || '—';
-        const display = full.length > 40 ? full.slice(0, 40).trim() + '…' : (full || code);
-        return '<span class="cell-states" title="' + esc(full || code) + '">'
-          + esc(display) + '</span>'
-          + (r.states_acronyms ? ' <span class="muted">(' + esc(r.states_acronyms) + ')</span>' : '');
+        const names = r.states_full || [];
+        const display = names.length > 4 ? names.slice(0, 4).join(', ') + ' +' + (names.length - 4) + ' more' : (full || code);
+        return '<span class="cell-states" title="' + esc(full || code) + '">' + esc(display) + '</span>';
       }
       case 'seasons':           return r.seasons ? esc(r.seasons) : '—';
       case 'days_to_maturity': {
@@ -1120,15 +1119,16 @@
     const stressTypeSource = (rec.trusted_stress_types && rec.trusted_stress_types.length)
       ? rec.trusted_stress_types
       : [];
+    const _lv = rec.stress_levels_gemini || {};
+    const stressLevelBadges = ['drought', 'heat', 'salinity', 'flood', 'submergence'].map(k => '<span class="badge ' + ((_lv[k] || 'unknown') === 'unknown' ? '' : 'badge--attr') + '">' + esc(k.charAt(0).toUpperCase() + k.slice(1)) + ': ' + esc(_lv[k] || 'unknown') + '</span>').join(' ');
     const stressTypeBadges = stressTypeSource.length
       ? stressTypeSource.map(t =>
           '<span class="badge badge--stress-type">' + esc(t) + '</span>').join(' ')
       : '<span class="muted">No structured stress types available.</span>';
 
-    const keyAttrBadges = rec.key_attributes
-      ? rec.key_attributes.split(',').map(s => s.trim()).filter(Boolean)
-          .map(t => '<span class="badge badge--attr">' + esc(t) + '</span>').join(' ')
-      : '<span class="muted">No key attributes recorded.</span>';
+    const keyAttrBadges = (rec.stress_types_strict && rec.stress_types_strict.length)
+      ? rec.stress_types_strict.map(t => '<span class="badge badge--attr">' + esc(t) + '</span>').join(' ')
+      : '<span class="muted">No stress tolerance found in the evidence.</span>';
 
     const states = (rec.states_full && rec.states_full.length)
       ? rec.states_full.map(s => esc(s)).join(', ')
@@ -1243,8 +1243,8 @@
       +     '<div class="badge-row">' + keyAttrBadges + '</div>'
       +   '</div>'
       +   '<div class="research-card">'
-      +     '<h3 class="research-card__h">Stress types</h3>'
-      +     '<div class="badge-row">' + stressTypeBadges + '</div>'
+      +     '<h3 class="research-card__h">Stress levels (from evidence)</h3>'
+      +     '<div class="badge-row">' + stressLevelBadges + '</div>'
       +   '</div>'
       +   '<div class="research-card">'
       +     '<h3 class="research-card__h">Evidence quality</h3>'

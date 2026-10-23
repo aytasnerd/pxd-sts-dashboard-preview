@@ -75,7 +75,7 @@ select.input { appearance: none; -webkit-appearance: none; background-image: lin
 .dropdown__pin { color: var(--muted); font-size: 11px; margin-left: auto; }
 .table-scroll { overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.data-table th { text-align: left; font: 600 11.5px/1.2 var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--line-2); background: var(--surface); white-space: nowrap; position: sticky; top: 64px; z-index: 5; }
+.data-table th { text-align: left; font: 600 11.5px/1.2 var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--line-2); background: var(--surface); white-space: nowrap; }
 .data-table td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.4; }
 .data-row { cursor: pointer; }
 .data-row:hover { background: var(--accent-soft); }
@@ -180,3 +180,6 @@ body.modal-open { overflow: hidden; }
 .query-link-row__actions { white-space: normal; }
 .field-row__value a { display: inline; }
 .modal__meta .chip, .modal__meta .badge { white-space: normal; }
+
+.page-size-label { white-space: nowrap; }
+.table-controls__group { white-space: nowrap; }
