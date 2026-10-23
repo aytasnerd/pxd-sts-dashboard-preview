@@ -190,3 +190,10 @@ details.more > summary { cursor: pointer; color: var(--accent); font-size: 12.5p
 details.more > summary::before { content: '+ '; }
 details.more[open] > summary::before { content: '– '; }
 .app-header { background: rgba(245,249,247,.95); }
+
+/* header spans the full width; intro centred and wide */
+.app-header__inner { max-width: none; padding: 12px 32px; }
+.container { padding: 0 32px; }
+.about-summary { max-width: none; margin: 0 auto; padding: 22px 0 8px; text-align: left; }
+.about-summary p { max-width: 1100px; font-size: 15px; }
+.about-summary p.muted { font-size: 13px; }
