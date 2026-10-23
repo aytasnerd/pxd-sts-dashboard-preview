@@ -30,7 +30,7 @@
   // Variety Name is marked alwaysVisible so the toggle UI hides it from
   // the togglable list per spec (rows must always identify themselves).
   // legacy search-hit columns stay available in the Columns menu but start hidden
-  const HIDDEN_BY_DEFAULT = new Set(['stress_tolerance', 'stress_types', 'seasons', 'days_to_maturity', 'evidence_quality']);
+  const HIDDEN_BY_DEFAULT = new Set(['stress_tolerance', 'stress_types', 'seasons', 'days_to_maturity', 'evidence_quality', 'enrichment_wave']);
   const COLUMNS = [
     { key: 'crop',              label: 'Crop' },
     { key: 'variety_name',      label: 'Variety Name', alwaysVisible: true },
@@ -929,7 +929,7 @@
     }
     const pm = (((rec.research_data || {}).full_analysis_result || {}).processing_metadata) || {};
     const provenance = [pm.model || (rec.enrichment_wave && rec.enrichment_wave.indexOf('Gemini') !== -1 ? 'gemini-2.5-flash' : ''), pm.analysis_date ? String(pm.analysis_date).slice(0, 10) : '', (rec.search_metadata && rec.search_metadata.total_queries) ? rec.search_metadata.total_queries + ' searches' : ''].filter(Boolean).join(' · ');
-    tabs.push({ id: 'research', label: 'Research & evidence', badge: provenance || 'research summary' });
+    tabs.push({ id: 'research', label: 'Research & evidence', badge: 'web evidence' });
 
     const tabBar = $('modal-tabs');
     tabBar.innerHTML = tabs.map(t =>
@@ -1017,7 +1017,7 @@
 
     return '<section class="tab-panel tab-panel--seednet" role="tabpanel">'
       + '<div class="tab-panel__head">'
-XX
+      +   '<span class="badge-banner badge-banner--seednet">Source: seednet.gov.in (Government of India), scraped 2025-07-26</span>'
       +   (portalUrl
           ? '<a class="btn btn--seednet" href="' + esc(portalUrl) + '" target="_blank" rel="noopener">'
               + 'View on Seednet Portal ↗</a>'
@@ -1223,7 +1223,8 @@ XX
 
     return '<section class="tab-panel tab-panel--research" role="tabpanel">'
       + '<div class="tab-panel__head">'
-XX
+      +   '<span class="badge-banner badge-banner--research">Summary written by ' + esc(((((rec.research_data || {}).full_analysis_result || {}).processing_metadata) || {}).model || 'gemini-2.5-flash') + ' on ' + esc(String(((((rec.research_data || {}).full_analysis_result || {}).processing_metadata) || {}).analysis_date || '').slice(0, 10)) + ' from ' + esc(String((rec.search_metadata || {}).total_queries || 0)) + ' web searches; every claim links to its source below.</span>'
+      + '</div>'
       + '<div class="research-grid">'
       +   '<div class="research-card">'
       +     '<h3 class="research-card__h">Key attributes</h3>'
@@ -1278,7 +1279,12 @@ XX
       + '<dl class="field-grid">' + agrRows + '</dl>'
       + '<h3 class="research-card__h research-card__h--block">Genetics and breeding</h3>'
       + '<dl class="field-grid">' + geneticsRows + '</dl>'
-XX
+      + '<h3 class="research-card__h research-card__h--block">Official sources</h3>'
+      + '<dl class="field-grid">' + officialRows + '</dl>'
+      + '<h3 class="research-card__h research-card__h--block">Breeder and contacts (from research evidence)</h3>'
+      + '<dl class="field-grid">' + breederRows + '</dl>'
+      + '<h3 class="research-card__h research-card__h--block">Institution contact (official)</h3>'
+      + '<dl class="field-grid">' + instRows + '</dl>'
       + '<h3 class="research-card__h research-card__h--block">Publications (Google Scholar via SerpAPI, 2025; mentions of the variety name)</h3>'
       + spubRows
       + '<h3 class="research-card__h research-card__h--block">Publications (OpenAlex, mentions of the variety name)</h3>'
