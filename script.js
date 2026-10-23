@@ -1135,7 +1135,7 @@
       : (rec.states_acronyms ? esc(rec.states_acronyms) : '<span class="muted">—</span>');
 
     function detailRow(label, value) {
-      const has = value != null && String(value).trim() !== '';
+      const has = value != null && String(value).trim() !== '' && !/^(nan|none|null|not specified|unknown)$/i.test(String(value).trim());
       return '<div class="field-row">'
         + '<dt class="field-row__label">' + esc(label) + '</dt>'
         + '<dd class="field-row__value' + (has ? '' : ' field-row__value--muted') + '">'
