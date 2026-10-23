@@ -326,7 +326,8 @@
     const rec = Object.assign({}, r);
 
     rec.variety_id = String(r.variety_id || '');
-    rec.crop = String(r.crop || '').trim();
+    rec.crop_raw = String(r.crop || '').trim();
+    rec.crop = String(r.crop_clean || r.crop || '').trim();  // canonical crop label (standardize.py); raw CSC/Seednet spelling kept in crop_raw
     rec._crop_norm = normalizeCropName(r.crop_clean || rec.crop);
     rec.variety_name = String(r.variety_name || '').trim();
 
