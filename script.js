@@ -245,7 +245,7 @@
     // Filter inputs — debounce search to keep render cheap on key-mash.
     $('filter-search').addEventListener('input', debounce(applyFilters, 120));
     ['filter-crop', 'filter-state', 'filter-stress-tol', 'filter-evidence',
-     'filter-stress-type', 'filter-source']
+     'filter-stress-type', 'filter-source', 'filter-institution', 'filter-contact']
       .forEach(id => $(id).addEventListener('change', applyFilters));
     $('filter-year-min').addEventListener('input', debounce(applyFilters, 200));
     $('filter-year-max').addEventListener('input', debounce(applyFilters, 200));
@@ -1272,6 +1272,7 @@
                   + '<br><span class="muted">' + pubs + ' publication mention' + (pubs === 1 ? '' : 's') + ' listed below · ' + esc(String(resultsSummary != null ? resultsSummary : 0)) + ' search results</span>';
               })()
       +     '</p>'
+      +   '</div>'
       + '</div>'
       + '<h3 class="research-card__h research-card__h--block">Detailed stress evidence</h3>'
       + '<dl class="field-grid">' + stressRows + '</dl>'

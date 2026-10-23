@@ -6,7 +6,7 @@
   <meta name="description" content="Stress-Tolerant Seed Varieties Dashboard for India — a reference catalogue combining Seednet (Government of India) variety records with curated research evidence." />
   <title>Stress-Tolerant Seed Varieties of India — Precision Development</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./style.css?v=20261022j" />
 </head>
 <body>
   <!--
@@ -23,47 +23,23 @@
       <div class="app-header__brand">
         <img src="PxD_logo.png" alt="Precision Development logo" class="app-header__logo" />
         <div class="app-header__titles">
-          <h1 class="app-header__title">India's Seed Varieties Dashboard</h1>
-          <p class="app-header__subtitle">Stress-tolerant seed variety identification · Precision Development</p>
+          <h1 class="app-header__title">Stress-Tolerant Seed Varieties of India</h1>
+          <p class="app-header__subtitle">A reference catalogue by Precision Development</p>
         </div>
       </div>
       <nav class="app-header__nav" aria-label="Primary actions">
-        <button id="btn-reload" class="btn btn--ghost" type="button" aria-label="Reload data from JSON source">
-          <span aria-hidden="true">↻</span> Reload Data
-        </button>
-        <button id="btn-about" class="btn btn--ghost" type="button" aria-haspopup="dialog">About</button>
-        <a id="link-github" class="btn btn--ghost" href="https://github.com/kushal-satya/pxd-sts-dashboard" target="_blank" rel="noopener" aria-label="Open GitHub repository">GitHub</a>
+        <button id="btn-about" class="btn btn--ghost" type="button" aria-haspopup="dialog">About the data</button>
+        <a id="link-github" class="btn btn--ghost" href="https://github.com/kushal-satya/pxd-sts-dashboard" target="_blank" rel="noopener">Source</a>
+        <button id="btn-reload" class="btn btn--ghost" type="button" aria-label="Reload data from JSON source">Reload</button>
       </nav>
     </div>
   </header>
 
   <main id="main" class="container" role="main">
     <!-- KPIs: values populated by script.js after fetch; aria-busy until then. -->
-    <section class="kpi-strip" aria-label="Dataset summary">
-      <article class="kpi-card">
-        <span class="kpi-card__label">Varieties</span>
-        <span class="kpi-card__value" id="kpi-total" aria-busy="true">—</span>
-      </article>
-      <article class="kpi-card">
-        <span class="kpi-card__label">Stress tolerant (search hits)</span>
-        <span class="kpi-card__value" id="kpi-stress" aria-busy="true">—</span>
-      </article>
-        <article class="kpi-card">
-          <span class="kpi-card__label">Stress tolerant (evidence-based)</span>
-          <span class="kpi-card__value" id="kpi-stress-strict" aria-busy="true">—</span>
-        </article>
-        <article class="kpi-card">
-          <span class="kpi-card__label">With publications</span>
-          <span class="kpi-card__value" id="kpi-pubs" aria-busy="true">—</span>
-        </article>
-      <article class="kpi-card">
-        <span class="kpi-card__label">High search coverage</span>
-        <span class="kpi-card__value" id="kpi-high-ev" aria-busy="true">—</span>
-      </article>
-      <article class="kpi-card">
-        <span class="kpi-card__label">Crops</span>
-        <span class="kpi-card__value" id="kpi-crops" aria-busy="true">—</span>
-      </article>
+    <section class="about-summary" aria-label="About this dataset">
+      <p>Reference catalogue of <strong id="about-count">—</strong> stress-tolerant seed varieties released in India (Central Sub-Committee on Crop Standards, Notification and Release of Varieties), each matched to its Seednet (Government of India) record. Every row links to its official sources, the developing institution and its contact details, published research (Google Scholar, OpenAlex) and an evidence-based reading of drought, heat, salinity, flood and submergence tolerance.</p>
+      <p class="muted">Open a row for the full evidence. Research summaries were produced by language models from web searches (Aug 2025 and Oct 2026) and always cite their sources; treat them as leads to verify, not as official data.</p>
     </section>
 
     <!--
@@ -81,16 +57,18 @@
       <button id="btn-error-dismiss" type="button" class="error-banner__close" aria-label="Dismiss error">×</button>
     </div>
 
+    <div class="layout">
+    <aside class="rail">
     <section class="card filter-card" aria-label="Filters">
       <header class="filter-card__head">
-        <h2 class="card__title">Filters</h2>
-        <button id="btn-reset" type="button" class="btn btn--secondary">Reset filters</button>
+        <h2 class="card__title">Filter</h2>
+        <button id="btn-reset" type="button" class="btn btn--link">Reset</button>
       </header>
 
       <div class="filter-card__search">
         <label class="visually-hidden" for="filter-search">Search varieties</label>
         <input id="filter-search" type="search" class="input input--search"
-               placeholder="Search variety name, crop, attributes, or state code…"
+               placeholder="Search name, crop, state…"
                autocomplete="off" inputmode="search" />
       </div>
 
@@ -110,19 +88,27 @@
         </div>
         <div class="filter-group">
           <label for="filter-stress-tol">Stress Tolerance</label>
-          <select id="filter-stress-tol" multiple size="3" aria-describedby="hint-multi"></select>
+          <select id="filter-stress-tol" class="input"></select>
         </div>
         <div class="filter-group">
           <label for="filter-evidence">Evidence Quality</label>
-          <select id="filter-evidence" multiple size="3" aria-describedby="hint-multi"></select>
+          <select id="filter-evidence" class="input"></select>
         </div>
         <div class="filter-group">
           <label for="filter-stress-type">Stress Type</label>
-          <select id="filter-stress-type" multiple size="6" aria-describedby="hint-multi"></select>
+          <select id="filter-stress-type" class="input"></select>
         </div>
         <div class="filter-group">
           <label for="filter-source">Data Source</label>
-          <select id="filter-source" multiple size="3" aria-describedby="hint-multi"></select>
+          <select id="filter-source" class="input"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-institution">Institution</label>
+          <select id="filter-institution" class="input"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-contact">Contact details</label>
+          <select id="filter-contact" class="input"></select>
         </div>
         <div class="filter-group filter-group--year">
           <span class="filter-group__legend">Year of Release</span>
@@ -135,8 +121,10 @@
           </div>
         </div>
       </div>
-      <p id="hint-multi" class="filter-hint">Crop and State are single-choice (All = no filter). For the other lists hold Ctrl (Windows) or Command (macOS) to select several values; an empty list applies no filter.</p>
+      <p id="hint-multi" class="filter-hint">Each list is single-choice; "All" applies no filter.</p>
     </section>
+    </aside>
+    <div class="results">
 
     <section class="result-bar" aria-live="polite">
       <span id="result-count" class="result-bar__count">Loading…</span>
@@ -185,6 +173,8 @@
         <button id="btn-next" type="button" class="btn btn--ghost" disabled>Next →</button>
       </div>
     </section>
+    </div>
+    </div>
   </main>
 
   <footer class="app-footer" role="contentinfo">
@@ -225,6 +215,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=handover_v2_20261022h" defer></script>
+  <script src="./script.js?v=handover_v2_20261022j" defer></script>
 </body>
 </html>
