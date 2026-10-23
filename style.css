@@ -170,3 +170,13 @@ body.modal-open { overflow: hidden; }
   .field-row { grid-template-columns: 1fr; gap: 2px; }
   .modal__panel { width: 100%; }
 }
+
+/* overflow hardening in the record drawer */
+.modal__panel, .modal__body, .modal__body * { min-width: 0; }
+.modal__body { overflow-wrap: anywhere; word-break: break-word; }
+.modal__body a { overflow-wrap: anywhere; }
+.research-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.query-link-row { flex-wrap: wrap; }
+.query-link-row__actions { white-space: normal; }
+.field-row__value a { display: inline; }
+.modal__meta .chip, .modal__meta .badge { white-space: normal; }
