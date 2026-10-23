@@ -281,10 +281,11 @@
       const opts = { cache: STATE.meta.loadedAt ? 'no-store' : 'default' };
       let data;
       // Sharded data (GitHub keeps files under 100 MB): data/index.json lists the parts. Single-file fallback kept.
-      const idx = await fetch('./data/index.json' + bust, opts).catch(() => null);
+      const DATA_VERSION = (document.currentScript && document.currentScript.src.split('v=')[1]) || String(Date.now());
+      const idx = await fetch('./data/index.json?v=' + DATA_VERSION + (bust ? '&t=' + Date.now() : ''), opts).catch(() => null);
       if (idx && idx.ok) {
-        const parts = (await idx.json()).parts || [];
-        const chunks = await Promise.all(parts.map(async p => { const r = await fetch('./' + p + bust, opts); if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + p); return r.json(); }));
+        const meta = await idx.json(); const parts = meta.parts || []; const built = encodeURIComponent(meta.built || DATA_VERSION);
+        const chunks = await Promise.all(parts.map(async p => { const r = await fetch('./' + p + '?v=' + built + (bust ? '&t=' + Date.now() : ''), opts); if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + p); return r.json(); }));
         data = [].concat(...chunks);
       } else {
         const res = await fetch(JSON_PATH + bust, opts);
