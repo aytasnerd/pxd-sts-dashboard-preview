@@ -3,221 +3,176 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Seed Varieties of India — a seed variety dashboard of crop varieties considered by the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC), with official records, Seednet links, research evidence, stress tolerance and institution contacts." />
-  <title>Seed Varieties of India — Precision Development</title>
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="Seed variety dashboard of crop varieties considered by India's Central Sub-Committee on Crop Standards, Notification and Release of Varieties, with official records, contacts and research evidence." />
+  <title>Seed Varieties of India</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css?v=20261110e" />
+  <link rel="stylesheet" href="./style.css?v=20261110r18" />
 </head>
 <body>
-  <!--
-    Layout intent: a single column app shell with a sticky brand header,
-    KPI strip, filter card, table card, and a portal-rendered modal layer.
-    All interactive controls expose stable IDs that script.js binds to;
-    no markup carries data values — everything inside data regions starts
-    empty/aria-busy and is hydrated after fetch().
-  -->
-  <a class="skip-link" href="#main">Skip to main content</a>
+  <a class="skip-link" href="#main">Skip to the list of varieties</a>
 
-  <header class="app-header" role="banner">
-    <div class="container app-header__inner">
+  <header class="app-header">
+    <div class="app-header__inner">
       <div class="app-header__brand">
-        <img src="PxD_logo.png" alt="Precision Development logo" class="app-header__logo" />
-        <div class="app-header__titles">
+        <img src="PxD_logo.png" alt="Precision Development" class="app-header__logo" />
+        <div>
           <h1 class="app-header__title">Seed Varieties of India</h1>
-          <p class="app-header__subtitle">Seed variety dashboard — CSC releases, official records, research evidence and stress tolerance</p>
+          <p class="app-header__subtitle">Seed variety dashboard: crop varieties considered by India's Central Sub-Committee on Crop Standards, 1975–2025, with official records, contacts and research evidence</p>
         </div>
       </div>
-      <nav class="app-header__nav" aria-label="Primary actions">
-        <button id="btn-about" class="btn btn--ghost" type="button" aria-haspopup="dialog">About the data</button>
-        <a id="link-github" class="btn btn--ghost" href="https://github.com/kushal-satya/pxd-sts-dashboard" target="_blank" rel="noopener">Source</a>
-        <button id="btn-reload" class="btn btn--ghost" type="button" aria-label="Reload data from JSON source">Reload</button>
+      <nav class="app-header__nav" aria-label="About this page">
+        <button id="btn-coverage" class="nav-link" type="button" aria-haspopup="dialog" hidden>Coverage</button>
+        <button id="btn-about" class="nav-link" type="button" aria-haspopup="dialog">About the data</button>
+        <a class="nav-link" href="https://github.com/kushal-satya/pxd-sts-dashboard" target="_blank" rel="noopener">Data and code</a>
       </nav>
     </div>
   </header>
 
-  <main id="main" class="container" role="main">
-    <!-- KPIs: values populated by script.js after fetch; aria-busy until then. -->
-    <section class="about-summary" aria-label="About this dataset">
-      <p id="intro-text">Seed variety dashboard of <strong id="about-count">—</strong> crop varieties considered by the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC).</p>
-      <p class="muted">Open a row for the full record. Research summaries were written by language models from web searches (Aug 2025 and Oct–Nov 2026) and cite their sources; treat them as leads to verify, not as official data.</p>
+  <main id="main" class="container">
+    <section class="intro" aria-label="About this dataset">
+      <p id="intro-text">Loading the records.</p>
+      <p id="intro-note" class="muted"></p>
     </section>
 
-    <!--
-      Error banner: hidden by default; script.js shows it on fetch failure
-      and wires the inline retry button. Kept inside flow (not absolute) so
-      it pushes content down and remains screen-reader-discoverable.
-    -->
     <div id="error-banner" class="error-banner" role="alert" hidden>
-      <div class="error-banner__icon" aria-hidden="true">!</div>
-      <div class="error-banner__body">
-        <p class="error-banner__title">Unable to load dataset</p>
-        <p class="error-banner__detail" id="error-banner-detail"></p>
-      </div>
-      <button id="btn-retry" type="button" class="btn btn--primary">Retry</button>
-      <button id="btn-error-dismiss" type="button" class="error-banner__close" aria-label="Dismiss error">×</button>
+      <p class="error-banner__title">The data could not be loaded.</p>
+      <p class="error-banner__detail" id="error-banner-detail"></p>
+      <button id="btn-retry" type="button" class="btn">Try again</button>
+      <button id="btn-error-dismiss" type="button" class="btn-link">Dismiss</button>
     </div>
 
     <div class="layout">
-    <aside class="rail">
-    <section class="card filter-card" aria-label="Filters">
-      <header class="filter-card__head">
-        <h2 class="card__title">Filter</h2>
-        <button id="btn-reset" type="button" class="btn btn--link">Reset</button>
-      </header>
+      <aside class="rail" aria-label="Filters">
+        <details id="filter-details" class="filters">
+          <summary id="filter-summary">Filter the list</summary>
+          <div class="filters__body">
+            <div class="filter-group">
+              <label for="filter-search">Search</label>
+              <input id="filter-search" type="search" class="input" placeholder="Variety, crop, state or institution" autocomplete="off" />
+            </div>
+            <div class="filter-group">
+              <label for="filter-crop">Crop</label>
+              <select id="filter-crop" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-state">State</label>
+              <select id="filter-state" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-stress-type">Stress type</label>
+              <select id="filter-stress-type" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-stress-evidence">Stress evidence</label>
+              <select id="filter-stress-evidence" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-outcome">Outcome</label>
+              <select id="filter-outcome" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-source">Source of the record</label>
+              <select id="filter-source" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-institution">Developing institution</label>
+              <input id="filter-institution" type="search" class="input" list="institution-list" placeholder="Type part of a name" autocomplete="off" />
+              <datalist id="institution-list"></datalist>
+            </div>
+            <div class="filter-group">
+              <label for="filter-contact">Contact details available</label>
+              <select id="filter-contact" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-research">Researched on the web</label>
+              <select id="filter-research" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-seednet">Seednet record</label>
+              <select id="filter-seednet" class="input"></select>
+            </div>
+            <fieldset class="filter-group filter-group--year">
+              <legend>Year considered</legend>
+              <div class="filter-year-row">
+                <label class="visually-hidden" for="filter-year-min">From year</label>
+                <input id="filter-year-min" type="number" class="input" placeholder="From" inputmode="numeric" />
+                <span aria-hidden="true">to</span>
+                <label class="visually-hidden" for="filter-year-max">To year</label>
+                <input id="filter-year-max" type="number" class="input" placeholder="To" inputmode="numeric" />
+              </div>
+            </fieldset>
+            <input id="filter-minutes" type="hidden" value="" />
+            <button id="btn-reset" type="button" class="btn-link">Clear all filters</button>
+          </div>
+        </details>
+      </aside>
 
-      <div class="filter-card__search">
-        <label class="visually-hidden" for="filter-search">Search varieties</label>
-        <input id="filter-search" type="search" class="input input--search"
-               placeholder="Search name, crop, state…"
-               autocomplete="off" inputmode="search" />
-      </div>
+      <div class="results">
+        <div class="result-bar">
+          <p id="result-count" class="result-bar__count" aria-live="polite">Loading the records.</p>
+          <p id="data-compiled" class="result-bar__meta"></p>
+        </div>
 
-      <!--
-        Six multi-select filters + two year inputs. Options are NOT in markup;
-        script.js fills them from the live data so that the dashboard can never
-        offer a value the dataset doesn't actually contain.
-      -->
-      <div class="filter-grid">
-        <div class="filter-group">
-          <label for="filter-crop">Crop</label>
-          <select id="filter-crop" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-state">State</label>
-          <select id="filter-state" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-stress-tol">Stress Tolerance</label>
-          <select id="filter-stress-tol" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-evidence">Evidence Quality</label>
-          <select id="filter-evidence" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-stress-type">Stress Type</label>
-          <select id="filter-stress-type" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-stress-evidence">Stress evidence</label>
-          <select id="filter-stress-evidence" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-research">Research status</label>
-          <select id="filter-research" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-seednet">Seednet record</label>
-          <select id="filter-seednet" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-institution">Institution</label>
-          <select id="filter-institution" class="input"></select>
-        </div>
-        <div class="filter-group">
-          <label for="filter-contact">Contact details</label>
-          <select id="filter-contact" class="input"></select>
-        </div>
-        <div class="filter-group filter-group--year">
-          <span class="filter-group__legend">Year of Release</span>
-          <div class="filter-year-row">
-            <label class="visually-hidden" for="filter-year-min">Year from</label>
-            <input id="filter-year-min" type="number" class="input input--year" placeholder="From" inputmode="numeric" />
-            <span class="filter-year-row__sep" aria-hidden="true">–</span>
-            <label class="visually-hidden" for="filter-year-max">Year to</label>
-            <input id="filter-year-max" type="number" class="input input--year" placeholder="To" inputmode="numeric" />
+        <div class="table-controls">
+          <div class="table-controls__group">
+            <div class="dropdown" id="columns-wrap">
+              <button id="btn-columns" type="button" class="btn" aria-haspopup="true" aria-expanded="false" aria-controls="columns-menu">Columns</button>
+              <div id="columns-menu" class="dropdown__menu" role="group" aria-label="Columns shown in the list" hidden></div>
+            </div>
+            <button id="btn-export-csv" type="button" class="btn">Download CSV</button>
+          </div>
+          <div class="table-controls__group">
+            <label for="select-page-size">Rows per page</label>
+            <select id="select-page-size" class="input input--narrow">
+              <option value="25" selected>25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
           </div>
         </div>
-      </div>
-      <p id="hint-multi" class="filter-hint">Each list is single-choice; "All" applies no filter.</p>
-    </section>
-    </aside>
-    <div class="results">
 
-    <section class="result-bar" aria-live="polite">
-      <span id="result-count" class="result-bar__count">Loading…</span>
-      <span class="result-bar__meta">
-        Last updated: <time id="last-updated" datetime="">—</time>
-      </span>
-    </section>
-
-    <section class="card table-card">
-      <div class="table-controls">
-        <div class="table-controls__group">
-          <div class="dropdown" id="columns-wrap">
-            <button id="btn-columns" type="button" class="btn btn--secondary"
-                    aria-haspopup="true" aria-expanded="false" aria-controls="columns-menu">
-              Columns ▾
-            </button>
-            <!-- Column toggles are generated by script.js so the labels and
-                 keys stay in lock-step with renderTable's column registry. -->
-            <div id="columns-menu" class="dropdown__menu" role="menu" hidden></div>
-          </div>
-          <button id="btn-export-csv" type="button" class="btn btn--secondary">Export CSV</button>
+        <div class="table-scroll">
+          <table id="tbl-varieties" class="data-table">
+            <caption class="visually-hidden">Crop varieties considered by the CSC. Select a variety name to open its record.</caption>
+            <thead></thead>
+            <tbody></tbody>
+          </table>
         </div>
-        <div class="table-controls__group">
-          <label class="page-size-label" for="select-page-size">Rows per page</label>
-          <select id="select-page-size" class="input input--page-size">
-            <option value="25" selected>25</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
-          </select>
-        </div>
-      </div>
 
-      <div class="table-scroll" role="region" aria-label="Varieties table" tabindex="0">
-        <table id="tbl-varieties" class="data-table">
-          <!-- thead and tbody are rendered by script.js so column visibility,
-               aria-sort state, and sort indicators stay synchronised. -->
-          <thead></thead>
-          <tbody></tbody>
-        </table>
+        <nav class="pagination" aria-label="Pages of the list">
+          <button id="btn-prev" type="button" class="btn" disabled>Previous page</button>
+          <span id="page-info" class="pagination__info">Page 1 of 1</span>
+          <button id="btn-next" type="button" class="btn" disabled>Next page</button>
+        </nav>
       </div>
-
-      <div class="pagination" aria-label="Pagination">
-        <button id="btn-prev" type="button" class="btn btn--ghost" disabled>← Previous</button>
-        <span id="page-info" class="pagination__info">Page 1 of 1</span>
-        <button id="btn-next" type="button" class="btn btn--ghost" disabled>Next →</button>
-      </div>
-    </section>
-    </div>
     </div>
   </main>
 
-  <footer class="app-footer" role="contentinfo">
-    <div class="container app-footer__inner">
-      <p class="app-footer__copy">© Precision Development · Seed Varieties of India · Sources and methods: see "About the data".</p>
-    </div>
+  <footer class="app-footer">
+    <p>Compiled by Precision Development. Sources and methods are described under "About the data".</p>
   </footer>
 
-  <!-- Loading overlay sits above content but below the modal layer. -->
-  <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite" aria-label="Loading data">
-    <div class="loading-overlay__spinner" aria-hidden="true"></div>
-    <p class="loading-overlay__text">Loading dataset…</p>
+  <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite">
+    <p>Loading the records.</p>
   </div>
 
-  <!--
-    Modal: a single shell that renders both the variety dual-tab view and
-    the About content. Script.js swaps body via data-mode and manages
-    focus trap + Escape close + backdrop click. Hidden via [hidden] so
-    keyboard navigation skips it when closed.
-  -->
-  <div id="detail-modal" class="modal" role="dialog" aria-modal="true"
-       aria-labelledby="modal-title" hidden>
+  <div id="detail-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
     <div class="modal__backdrop" data-modal-close></div>
-    <div class="modal__panel" role="document">
+    <div id="modal-panel" class="modal__panel">
       <header class="modal__head">
-        <h2 id="modal-title" class="modal__title">—</h2>
-        <button id="modal-close" type="button" class="modal__close"
-                aria-label="Close dialog" data-modal-close>×</button>
+        <div>
+          <h2 id="modal-title" class="modal__title"></h2>
+          <p id="modal-sub" class="modal__sub" hidden></p>
+        </div>
+        <button id="modal-close" type="button" class="modal__close" data-modal-close>Close</button>
       </header>
-      <div id="modal-meta" class="modal__meta"></div>
-      <div id="modal-tabs" class="modal__tabs" role="tablist"></div>
+      <div id="modal-tabs" class="modal__tabs" role="tablist" aria-label="Parts of the record" hidden></div>
       <div id="modal-body" class="modal__body"></div>
     </div>
   </div>
 
-  <script src="./script.js?v=20261110d" defer></script>
+  <script src="./script.js?v=20261110r18" defer></script>
 </body>
 </html>

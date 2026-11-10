@@ -1,20 +1,14 @@
 /*
- * Seed Varieties of India — seed variety dashboard runtime
- * (Precision Development)
+ * Seed Varieties of India (Precision Development)
  *
- * Design notes:
- *   - Single IIFE; no module imports, no globals beyond `window` listeners.
- *   - varieties_complete.json is the only source of truth. Filter options,
- *     KPI numbers, and table rows all derive from STATE.all (never embedded
- *     in HTML).
- *   - Normalization happens once at load. Internal "_year_int" / "_dtm_int"
- *     fields are added so sort and range filters can run against numbers
- *     even though the source schema mixes integer and free-text values.
- *   - All DOM mutation goes through a small set of named render functions
- *     so the call graph stays auditable: applyFilters → renderTable +
- *     renderPagination + updateResultCount + renderKPIs (idempotent).
- *   - Tailwind is intentionally NOT loaded; style.css carries the full
- *     design system. This keeps the page fully usable offline of any CDN.
+ * A static data publication. All numbers on the page are computed from the
+ * loaded records; nothing is hard-coded in HTML. Blank always means "not
+ * stated": placeholder strings in the source data are treated as blank and
+ * never rendered.
+ *
+ * Call graph: loadData -> normalizeRecord -> populateFilters / renderIntro ->
+ * applyFilters -> renderTable + renderPagination. Records open from the URL
+ * hash (#slug, #slug/evidence, #slug/contacts, #slug/sources, #about).
  */
 (function () {
   'use strict';
@@ -23,82 +17,81 @@
    * Constants                                                          *
    * ------------------------------------------------------------------ */
 
-  const JSON_PATH = './final_varieties_hyperlinked.json';
-
-  // Column registry. The order here is the table render order, and the
-  // `key` is the canonical schema field used for sort + visibility toggle.
-  // Variety Name is marked alwaysVisible so the toggle UI hides it from
-  // the togglable list per spec (rows must always identify themselves).
-  // legacy search-hit columns stay available in the Columns menu but start hidden
-  const HIDDEN_BY_DEFAULT = new Set(['stress_tolerance', 'stress_types', 'seasons', 'days_to_maturity', 'evidence_quality', 'enrichment_wave']);
   const COLUMNS = [
-    { key: 'crop',              label: 'Crop' },
-    { key: 'variety_name',      label: 'Variety Name', alwaysVisible: true },
-    { key: 'year_of_release',   label: 'Year' },
-    { key: 'stress_tolerance',  label: 'Stress Tolerant (search hits)' },
-    { key: '_stress_evidence', label: 'Stress evidence' },
-    { key: 'stress_types',      label: 'Stress Types (search hits)' },
-    { key: '_stress_types_display', label: 'Stress types' },
-    { key: 'publications_count', label: 'Publications' },
-    { key: 'enrichment_wave',   label: 'Data wave' },
-    { key: 'states_acronyms',   label: 'States' },
-    { key: 'seasons',           label: 'Seasons' },
-    { key: 'days_to_maturity',  label: 'Days to Maturity' },
-    { key: 'evidence_quality',  label: 'Evidence' },
-    { key: 'seednet_available', label: 'Seednet' }
+    { key: 'crop', label: 'Crop' },
+    { key: 'variety', label: 'Variety', alwaysVisible: true },
+    { key: 'year', label: 'Year considered' },
+    { key: 'outcome', label: 'Outcome' },
+    { key: 'stress', label: 'Stress tolerance' },
+    { key: 'states', label: 'States' },
+    { key: 'seednet', label: 'Seednet record', optional: true },
+    { key: 'institution', label: 'Developing institution', optional: true },
+    { key: 'pubs', label: 'Publications', optional: true }
   ];
-
-  // Stable filter vocabularies for the small fixed-domain filters. Kept in
-  // JS (not HTML) so the spec rule "no hardcoded option values in HTML"
-  // is satisfied while still presenting a predictable UI.
-  const VOCAB_EVIDENCES = ['High', 'Medium', 'Low'];
-  const VOCAB_STRESS_TOL = ['Yes', 'No'];
-  const VOCAB_STRESS_EVIDENCE = ['Confirmed by 2+ sources', 'Single source', 'Claimed, not confirmed', 'No stress tolerance claimed', 'Not checked', 'Not researched'];
-  const VOCAB_RESEARCH = ['Researched', 'Official data only'];
-  const VOCAB_SEEDNET = ['Linked', 'Not linked'];
+  const OUTCOMES = ['Approved', 'Deferred', 'Rejected', 'Not stated', 'Not in the CSC minutes held'];
+  const SOURCES = ['CSC minutes and Seednet', 'CSC minutes only', 'Seednet only'];
+  const DEFAULT_VIEW = { crop: 'Rice', researched: 'Yes' };
   const STRESS_KEYS = ['drought', 'heat', 'salinity', 'flood', 'submergence'];
   const STRESS_NAME = { drought: 'Drought', heat: 'Heat', salinity: 'Salinity', salt: 'Salinity', flood: 'Flood', submergence: 'Submergence' };
+  const EVIDENCE_LABEL = {
+    'Confirmed by 2+ sources': 'Two or more sources',
+    'Single source': 'One source',
+    'Claimed, not confirmed': 'Claimed, not confirmed',
+    'No stress tolerance claimed': 'None found',
+    'None found': 'None found'
+  };
+  const EVIDENCE_ORDER = ['Two or more sources', 'One source', 'Claimed, not confirmed', 'None found', 'Not graded'];
   const SEEDNET_CONFIRMED = new Set(['confirmed_exact', 'confirmed_spelling']);
-  const SELECT_FILTER_IDS = ['filter-crop', 'filter-state', 'filter-stress-tol', 'filter-evidence',
-    'filter-stress-type', 'filter-stress-evidence', 'filter-research', 'filter-seednet',
-    'filter-institution', 'filter-contact'];
+  const TABS = [
+    { id: 'record', label: 'Record' },
+    { id: 'evidence', label: 'Stress evidence' },
+    { id: 'contacts', label: 'Contacts' },
+    { id: 'sources', label: 'Publications and sources' }
+  ];
+  const SELECT_FILTERS = ['filter-crop', 'filter-state', 'filter-stress-type', 'filter-stress-evidence',
+    'filter-outcome', 'filter-source', 'filter-contact', 'filter-research', 'filter-seednet'];
+  // Filter state kept in the query string so a filtered view can be shared.
+  const URL_KEYS = [['q', 'filter-search'], ['crop', 'filter-crop'], ['state', 'filter-state'], ['stress', 'filter-stress-type'],
+    ['evidence', 'filter-stress-evidence'], ['outcome', 'filter-outcome'], ['source', 'filter-source'], ['institution', 'filter-institution'],
+    ['contact', 'filter-contact'], ['researched', 'filter-research'], ['seednet', 'filter-seednet'], ['from', 'filter-year-min'], ['to', 'filter-year-max'], ['minutes', 'filter-minutes']];
 
   const STATE_CODE_TO_NAME = {
     AP: 'Andhra Pradesh', AR: 'Arunachal Pradesh', AS: 'Assam', BR: 'Bihar',
     CG: 'Chhattisgarh', DL: 'Delhi', GA: 'Goa', GJ: 'Gujarat', HR: 'Haryana',
-    HP: 'Himachal Pradesh', JH: 'Jharkhand', JK: 'Jammu & Kashmir',
+    HP: 'Himachal Pradesh', JH: 'Jharkhand', JK: 'Jammu and Kashmir',
     KA: 'Karnataka', KL: 'Kerala', LA: 'Ladakh', MH: 'Maharashtra',
     ML: 'Meghalaya', MN: 'Manipur', MP: 'Madhya Pradesh', MZ: 'Mizoram',
     NL: 'Nagaland', OR: 'Odisha', PB: 'Punjab', PY: 'Puducherry', RJ: 'Rajasthan',
     SK: 'Sikkim', TG: 'Telangana', TN: 'Tamil Nadu', TR: 'Tripura',
     UK: 'Uttarakhand', UP: 'Uttar Pradesh', WB: 'West Bengal',
-    AN: 'Andaman & Nicobar Islands', CH: 'Chandigarh',
-    DD: 'Dadra & Nagar Haveli and Daman & Diu',
-    LD: 'Lakshadweep'
+    AN: 'Andaman and Nicobar Islands', CH: 'Chandigarh',
+    DD: 'Dadra and Nagar Haveli and Daman and Diu', LD: 'Lakshadweep'
   };
 
-  // Seednet sub-fields we deliberately suppress in the modal: source/audit
-  // metadata that adds noise without informing the end user, plus duplicate
-  // identifiers already shown at the variety header.
-  const SEEDNET_SKIP_KEYS = new Set([
-    'source_file', 'consolidation_group', 'consolidation_timestamp',
-    'variety_id', 'variety_name', 'source_url'
-  ]);
-
-  // Curated seednet field display order so the dialog reads like a spec
-  // sheet rather than a hash dump. Any keys not listed here are appended
-  // at the end alphabetically — preserves "render ALL fields" requirement.
-  const SEEDNET_FIELD_ORDER = [
-    'Group Name', 'Crop Name', 'Notification Number', 'Notification Date',
-    'State Central Variety', 'Year of Release',
-    'Institution Responsible for developing Breeder Seed', 'Parentage',
-    'Resemblence to Variety', 'Adaptation and recommended ecology',
-    'Maturity (in days)', 'Agronomic Features', 'Seed Rate (Kg/Ha)',
-    'Specific Morphological Characteristics',
-    'General Morphological Characteristics', 'Reaction to Stress',
-    'Reaction to Major Diseases', 'Reaction to Major Pests',
-    'Average Yield (Kg/Ha)', 'Spacing (in Cms)', 'Fertiliser Dosage (Kg/Ha)',
-    'Recommended States'
+  // Seednet fields shown in the record, in order, with sentence-case labels.
+  const SEEDNET_FIELDS = [
+    ['Variety Name', 'Name on Seednet'], ['Crop Name', 'Crop on Seednet'], ['Group Name', 'Crop group'],
+    ['Notification Number', 'Notification number'], ['Notification Date', 'Notification date'],
+    ['Year of Release', 'Year of release'], ['State Central Variety', 'State or central variety'],
+    ['Institution Responsible for developing Breeder Seed', 'Institution responsible for breeder seed'],
+    ['Parentage', 'Parentage'], ['Resemblence to Variety', 'Resemblance to variety'],
+    ['Adaptation and recommended ecology', 'Adaptation and recommended ecology'],
+    ['Recommended States', 'Recommended states'], ['Maturity (in days)', 'Maturity (days)'],
+    ['Average Yield (Kg/Ha)', 'Average yield (kg/ha)'], ['Seed Rate (Kg/Ha)', 'Seed rate (kg/ha)'],
+    ['Spacing (in Cms)', 'Spacing (cm)'], ['Fertiliser Dosage (Kg/Ha)', 'Fertiliser dose (kg/ha)'],
+    ['Agronomic Features', 'Agronomic features'],
+    ['General Morphological Characteristics', 'General morphology'],
+    ['Specific Morphological Characteristics', 'Specific morphology'],
+    ['Reaction to Stress', 'Reaction to stress'], ['Reaction to Major Diseases', 'Reaction to major diseases'],
+    ['Reaction to Major Pests', 'Reaction to major pests']
+  ];
+  const CSC_FIELDS = [
+    ['approval_status', 'Decision as written in the minutes'], ['meeting_number', 'Meeting'], ['approval_date', 'Meeting date'],
+    ['meeting_title', 'Title of the minutes'], ['source_document_filename', 'Source document'], ['page_reference', 'Page'],
+    ['variety_code', 'Variety code'], ['institution', 'Developing institution'],
+    ['institution_location', 'Institution location'], ['principal_investigator', 'Principal investigator'],
+    ['state_zone', 'States or zone'], ['agro_climatic_zones', 'Agro-climatic zones'], ['maturity_group', 'Maturity group'],
+    ['yield_performance', 'Yield performance'], ['special_traits', 'Special traits'], ['additional_notes', 'Notes']
   ];
 
   /* ------------------------------------------------------------------ *
@@ -106,138 +99,112 @@
    * ------------------------------------------------------------------ */
 
   const STATE = {
-    all: [],
-    filtered: [],
-    sort: { key: null, dir: 'asc' },
+    all: [], filtered: [], bySlug: new Map(),
+    sort: { key: 'crop', dir: 'asc' }, sorted: null, coverage: null, minutesByKey: new Map(),
     page: { size: 25, index: 1 },
-    columns: COLUMNS.reduce((acc, c) => { acc[c.key] = !HIDDEN_BY_DEFAULT.has(c.key); return acc; }, {}),
-    modal: { open: false, record: null, tab: 'seednet', lastFocus: null, mode: 'variety' },
-    meta: {
-      loadedAt: null,
-      vocab: {
-        crops: [], states: [], stressTypes: [],
-        evidences: VOCAB_EVIDENCES.slice(),
-        stressTols: VOCAB_STRESS_TOL.slice()
-      }
-    }
+    columns: COLUMNS.reduce((a, c) => { a[c.key] = !c.optional; return a; }, {}),
+    modal: { open: false, record: null, tab: 'record', lastFocus: null, mode: 'variety' },
+    meta: { built: '', vocab: {} }
   };
 
   /* ------------------------------------------------------------------ *
-   * DOM helpers                                                        *
+   * Helpers                                                            *
    * ------------------------------------------------------------------ */
 
   const $ = (id) => document.getElementById(id);
-
-  // textContent setter that gracefully no-ops if the element vanished.
-  const setText = (id, value) => { const el = $(id); if (el) el.textContent = value; };
-
-  // Minimal HTML-escaping for any user/data-derived string we interpolate
-  // into HTML. We render most things via textContent, but a few badges /
-  // multi-line cells use innerHTML for layout — those go through this.
-  const esc = (s) => String(s ?? '')
+  const setText = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const n = (v) => Number(v).toLocaleString('en-IN');
+  const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+  const uniqSorted = (arr) => uniq(arr).sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-  const uniqSorted = (arr) =>
-    Array.from(new Set(arr.filter(v => v !== '' && v != null))).sort((a, b) =>
-      String(a).localeCompare(String(b), undefined, { sensitivity: 'base' })
-    );
-
-  function toTitleCase(s) {
-    return String(s || '')
-      .toLowerCase()
-      .replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
-  }
-
-  function normalizeStateToken(token) {
-    const raw = String(token || '').trim().toUpperCase();
-    if (!raw) return '';
-    // Drop obvious parser junk / placeholders.
-    if (/^\[\]$/.test(raw) || /UNKNOWN|UNK|NAN|NOT|INF/.test(raw)) return '';
-    if (/[\[\]'"]/g.test(raw)) return '';
-    if (raw.length > 4) return '';
-
-    const alias = {
-      TS: 'TG', TEL: 'TG', UTT: 'UK', UTR: 'UK', JAM: 'JK', NCR: 'DL', NCT: 'DL'
-    };
-    const code = alias[raw] || raw;
-    return STATE_CODE_TO_NAME[code] ? code : '';
-  }
-
-  function normalizeCropName(name) {
-    const raw = String(name || '').trim();
-    if (!raw) return '';
-    let v = toTitleCase(raw)
-      .replace(/\s+/g, ' ')
-      .replace(/\s*\(Hybrid\)\s*/gi, ' Hybrid')
-      .replace(/\/\s*/g, '/');
-    const alias = {
-      'Bread wheat': 'Bread Wheat',
-      'Durum wheat': 'Durum Wheat',
-      'Pearl millet': 'Pearl Millet',
-      'Finger millet': 'Finger Millet',
-      'Indian mustard': 'Indian Mustard',
-      'Ground nut': 'Groundnut',
-      'Ground Nut': 'Groundnut',
-      'Green gram': 'Green Gram',
-      'Black gram': 'Black Gram',
-      'Mung bean': 'Mungbean',
-      'Field pea': 'Field Pea',
-      'Pigeon pea': 'Pigeonpea',
-      'Gobhi sarson': 'Gobhi Sarson'
-    };
-    return alias[v] || v;
-  }
-
-  // Deep stringify helper used to build a single searchable blob per record.
-  // This keeps filter latency low (one precomputed string lookup) while
-  // allowing full-text search to cover nested research + seednet details.
-  function flattenText(value) {
-    if (value == null) return '';
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      return String(value);
-    }
-    if (Array.isArray(value)) return value.map(flattenText).join(' ');
-    if (typeof value === 'object') {
-      return Object.values(value).map(flattenText).join(' ');
-    }
-    return '';
-  }
-
-  function normStressName(s) {
-    const k = String(s || '').trim().toLowerCase();
-    if (!k) return '';
-    return STRESS_NAME[k] || (k.charAt(0).toUpperCase() + k.slice(1));
-  }
-  function uniq(arr) { return Array.from(new Set(arr.filter(Boolean))); }
-
-  // True for values that carry no information: empty, placeholders such as
-  // "Not specified" / "N/A" / "-", and the extraction stubs found in the CSC
-  // minutes ("Not explicitly stated in provided fragment").
-  function isBlankish(v) {
+  // Placeholder strings that carry no information. They are never rendered.
+  const PLACEHOLDER_EXACT = /^(nan|none|null|undefined|n\/?a|na|nil|-+|—|–|\?|0000|unknown|unspecified|not specified|not available|not applicable|not stated|not found|not known|not mentioned|not reported|not recorded|not given|not provided|not found in searched sources|no information available from search results|no information available|no data|no data available|information not available|\[\]|\{\})\.?$/i;
+  const PLACEHOLDER_PREFIX = /^(not (specified|explicitly (stated|specified|mentioned)|available|extracted|stated|found|mentioned|reported|provided|given|known)\b|n\/a\b|no (specific )?(information|data|details|evidence|mention)( was)? (is )?(available|found|provided|reported)\b|no information available\b|information (is )?not available\b|unknown\b|specific information regarding\b.*\bnot found\b|no specific information\b)/i;
+  function isBlank(v) {
     if (v == null) return true;
-    if (Array.isArray(v)) return v.every(isBlankish);
-    if (typeof v === 'object') return Object.keys(v).length === 0 || Object.values(v).every(isBlankish);
-    const t = String(v).trim();
+    if (typeof v === 'number') return !Number.isFinite(v);
+    if (typeof v === 'boolean') return false;
+    if (Array.isArray(v)) return v.every(isBlank);
+    if (typeof v === 'object') return Object.keys(v).length === 0 || Object.values(v).every(isBlank);
+    const t = String(v).replace(/\s+/g, ' ').trim();
     if (!t) return true;
-    return /^(nan|none|null|undefined|n\/a|na|-|—|–|not specified|unknown|not found\.?)$/i.test(t)
-      || /^not (specified|explicitly stated|available|extracted|stated)\b/i.test(t)
-      || /^n\/a\b/i.test(t);
+    return PLACEHOLDER_EXACT.test(t) || PLACEHOLDER_PREFIX.test(t) || (t.length < 80 && /\((not specified|not named|unknown)[^)]*\)\s*\.?$/i.test(t) && /^[^,;]*$/.test(t.replace(/\(.*\)/, '')) && /^(sponsoring|the )?\s*(authority|institute|institution|organisation|organization)?\s*\(/i.test(t));
   }
   function humanKey(k) {
     const t = String(k || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
     return t.charAt(0).toUpperCase() + t.slice(1);
   }
-  // Plain-text rendering of any value (string, number, list, object).
+  // Plain text of any value; blank parts dropped.
   function asText(v) {
-    if (v == null) return '';
-    if (Array.isArray(v)) return v.filter(x => !isBlankish(x)).map(asText).join('; ');
-    if (typeof v === 'object') return Object.keys(v).filter(k => !isBlankish(v[k])).map(k => humanKey(k) + ': ' + asText(v[k])).join('; ');
+    if (isBlank(v)) return '';
+    if (Array.isArray(v)) return v.filter(x => !isBlank(x)).map(asText).filter(Boolean).join('; ');
+    if (typeof v === 'object') return Object.keys(v).filter(k => !isBlank(v[k])).map(k => humanKey(k) + ' ' + asText(v[k])).join('; ');
     return String(v).replace(/\s+/g, ' ').trim();
   }
-  function linkHtml(u, label) {
-    return u ? '<a target="_blank" rel="noopener" href="' + esc(u) + '">' + esc(label || u) + '</a>' : '';
+  function clean(v) { return isBlank(v) ? '' : asText(v); }
+  // Research prose: drop sentences that are placeholders or that refer to internal
+  // field names ("average_yield is null", "RESULT_2").
+  const INTERNAL_SENTENCE = /\b[a-z]+_[a-z_]+\b|\bRESULT_\d+\b|\boriginal (variety )?(data|record)\b|\b(is|as|was|recorded as|states?) '?null'?(?!\s+(allele|lox|kti|kunitz|lipoxygenase))\b|^null\b(?!\s+(allele|lox|kti|kunitz|lipoxygenase))/i;
+  const NOT_FOUND_SENTENCE = /\b(was|were|is|are|could not be|has not been|have not been)\s+(not\s+)?(found|identified|located|available|provided|specified|reported|mentioned|retrieved)\b[^.]*\b(search|results|sources|snippets|documents|provided|retrieved)\b|\bnot found in\b|^no (specific |further |detailed |direct |explicit )?(information|data|details|mention|evidence)\b|^no\b[^.]{0,60}\b(data|information|details|evidence|results)\b[^.]*\b(returned|found|available|reported|retrieved)\b/i;
+  function rclean(v) {
+    const t = clean(v);
+    if (!t) return '';
+    const sentences = t.split(/(?<=[.!?])\s+(?=[A-Z0-9("'])/);
+    const kept = sentences.map(x => x.trim()).filter(x => x && !isBlank(x.replace(/^[A-Za-z ()]+:\s*/, '')) && !isBlank(x) && !INTERNAL_SENTENCE.test(x) && !NOT_FOUND_SENTENCE.test(x));
+    return kept.join(' ').trim();
   }
+  function firstResearch() {
+    for (let i = 0; i < arguments.length; i++) { const t = rclean(arguments[i]); if (t) return t; }
+    return '';
+  }
+  function firstText() {
+    for (let i = 0; i < arguments.length; i++) { const t = clean(arguments[i]); if (t) return t; }
+    return '';
+  }
+  // Values typed entirely in capitals (Seednet, postal addresses) become title case.
+  function deshout(s) {
+    const t = String(s || '');
+    const words = t.match(/[A-Za-z]{4,}/g) || [];
+    if (words.length < 1 || t !== t.toUpperCase()) return t;
+    return t.toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
+  }
+  // Seednet sometimes runs state names together ("Andhra Pradeshchhattisgarhodisha").
+  function splitStates(v) {
+    const t = String(v || '');
+    if (/[,;\n]/.test(t)) return t;
+    const names = Object.values(STATE_CODE_TO_NAME).concat(['Orissa', 'Jammu & Kashmir', 'Pondicherry', 'Uttaranchal']).sort((a, b) => b.length - a.length);
+    let rest = t.toLowerCase().replace(/\s+/g, ''); const found = [];
+    while (rest.length) {
+      const hit = names.find(nm => rest.indexOf(nm.toLowerCase().replace(/\s+/g, '')) === 0);
+      if (!hit) return t;
+      found.push(hit); rest = rest.slice(hit.replace(/\s+/g, '').length);
+    }
+    return found.length > 1 ? found.join(', ') : t;
+  }
+  function capFirst(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+  function listJoin(arr) {
+    if (arr.length <= 1) return arr.join('');
+    return arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1];
+  }
+  function httpUrl(u) {
+    const t = String(u || '').trim();
+    if (!t) return '';
+    if (/^https?:\/\//i.test(t)) return t;
+    if (/^www\.|^[a-z0-9-]+(\.[a-z0-9-]+)+(\/|$)/i.test(t) && !/\s/.test(t)) return 'https://' + t;
+    return '';
+  }
+  function linkHtml(u, label) {
+    return u ? '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(label || u) + '</a>' : '';
+  }
+  function formatBuilt(b) {
+    const m = String(b || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? (Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + m[1]) : '';
+  }
+  function debounce(fn, ms) { let t; return function () { clearTimeout(t); const a = arguments; t = setTimeout(() => fn.apply(null, a), ms); }; }
 
   /* ------------------------------------------------------------------ *
    * Bootstrap                                                          *
@@ -251,1384 +218,1325 @@
   }
 
   function bindStaticHandlers() {
-    $('btn-reload').addEventListener('click', loadData);
     $('btn-retry').addEventListener('click', loadData);
-    $('btn-error-dismiss').addEventListener('click', () => $('error-banner').hidden = true);
-    $('btn-about').addEventListener('click', openAboutModal);
+    $('btn-error-dismiss').addEventListener('click', () => { $('error-banner').hidden = true; });
+    $('btn-about').addEventListener('click', () => { location.hash = 'about'; });
+    $('btn-coverage').addEventListener('click', () => { location.hash = 'coverage'; });
     $('btn-reset').addEventListener('click', resetFilters);
-
-    // Table controls
     $('select-page-size').addEventListener('change', (e) => {
-      STATE.page.size = parseInt(e.target.value, 10) || 25;
-      STATE.page.index = 1;
-      renderTable();
-      renderPagination();
+      STATE.page.size = parseInt(e.target.value, 10) || 25; STATE.page.index = 1; renderTable(); renderPagination();
     });
     $('btn-prev').addEventListener('click', () => goToPage(STATE.page.index - 1));
     $('btn-next').addEventListener('click', () => goToPage(STATE.page.index + 1));
     $('btn-export-csv').addEventListener('click', exportFilteredCSV);
 
-    // Columns dropdown — toggle open/close, with outside-click to dismiss.
-    const colsBtn = $('btn-columns');
-    const colsMenu = $('columns-menu');
+    const colsBtn = $('btn-columns'), colsMenu = $('columns-menu');
+    const closeCols = () => { colsMenu.hidden = true; colsBtn.setAttribute('aria-expanded', 'false'); };
     colsBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const opening = colsMenu.hidden;
-      colsMenu.hidden = !opening;
-      colsBtn.setAttribute('aria-expanded', String(opening));
+      colsMenu.hidden = !opening; colsBtn.setAttribute('aria-expanded', String(opening));
+      if (opening) { const first = colsMenu.querySelector('input:not(:disabled)'); if (first) first.focus(); }
     });
-    document.addEventListener('click', (e) => {
-      if (!$('columns-wrap').contains(e.target)) {
-        colsMenu.hidden = true;
-        colsBtn.setAttribute('aria-expanded', 'false');
-      }
-    });
+    document.addEventListener('click', (e) => { if (!$('columns-wrap').contains(e.target)) closeCols(); });
+    colsMenu.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeCols(); colsBtn.focus(); } });
 
-    // Filter inputs — debounce search to keep render cheap on key-mash.
-    $('filter-search').addEventListener('input', debounce(applyFilters, 120));
-    SELECT_FILTER_IDS.forEach(id => $(id).addEventListener('change', applyFilters));
-    $('filter-year-min').addEventListener('input', debounce(applyFilters, 200));
-    $('filter-year-max').addEventListener('input', debounce(applyFilters, 200));
+    $('filter-search').addEventListener('input', debounce(applyFilters, 150));
+    SELECT_FILTERS.forEach(id => $(id).addEventListener('change', applyFilters));
+    $('filter-institution').addEventListener('input', debounce(applyFilters, 200));
+    $('filter-year-min').addEventListener('input', debounce(applyFilters, 250));
+    $('filter-year-max').addEventListener('input', debounce(applyFilters, 250));
 
-    // Modal — backdrop and × buttons share a data-modal-close marker so we
-    // can attach a single delegated handler per the spec's keyboard rules.
-    $('detail-modal').addEventListener('click', (e) => {
-      if (e.target.closest('[data-modal-close]')) closeModal();
-    });
+    $('detail-modal').addEventListener('click', (e) => { if (e.target.closest('[data-modal-close]')) closeModal(); });
     document.addEventListener('keydown', onModalKeydown);
-  }
+    window.addEventListener('hashchange', route);
 
-  function debounce(fn, ms) {
-    let t;
-    return function () {
-      clearTimeout(t);
-      const args = arguments;
-      t = setTimeout(() => fn.apply(null, args), ms);
-    };
+    const fd = $('filter-details');
+    if (fd && window.matchMedia('(min-width: 901px)').matches) fd.open = true;
   }
 
   /* ------------------------------------------------------------------ *
-   * Data load + normalization                                          *
+   * Data load + normalisation                                          *
    * ------------------------------------------------------------------ */
 
   async function loadData() {
-    showLoading();
-    hideError();
+    showLoading(); hideError();
     try {
-      // Cache-bust on reload so users always see the freshest JSON without
-      // forcing a hard refresh; one-time fetch on load benefits from cache.
-      const bust = STATE.meta.loadedAt ? '?t=' + Date.now() : '';
-      const opts = { cache: STATE.meta.loadedAt ? 'no-store' : 'default' };
-      let data;
-      // Sharded data (GitHub keeps files under 100 MB): data/index.json lists the parts. Single-file fallback kept.
-      const DATA_VERSION = (document.currentScript && document.currentScript.src.split('v=')[1]) || String(Date.now());
-      const idx = await fetch('./data/index.json?v=' + DATA_VERSION + (bust ? '&t=' + Date.now() : ''), opts).catch(() => null);
-      if (idx && idx.ok) {
-        const meta = await idx.json(); STATE.meta.built = meta.built || ''; const parts = meta.parts || []; const built = encodeURIComponent(meta.built || DATA_VERSION);
-        const chunks = await Promise.all(parts.map(async p => { const r = await fetch('./' + p + '?v=' + built + (bust ? '&t=' + Date.now() : ''), opts); if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + p); return r.json(); }));
-        data = [].concat(...chunks);
-      } else {
-        const res = await fetch(JSON_PATH + bust, opts);
-        if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
-        data = await res.json();
-      }
-      if (!Array.isArray(data)) throw new Error('Expected JSON array, got ' + typeof data);
+      const idxRes = await fetch('./data/index.json?t=' + Date.now(), { cache: 'no-store' });
+      if (!idxRes.ok) throw new Error('HTTP ' + idxRes.status + ' on data/index.json');
+      const meta = await idxRes.json();
+      STATE.meta.built = meta.built || '';
+      const v = encodeURIComponent(meta.built || '');
+      const chunks = await Promise.all((meta.parts || []).map(async p => {
+        const r = await fetch('./' + p + '?v=' + v);
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + p);
+        return r.json();
+      }));
+      const data = [].concat(...chunks);
+      if (!data.length) throw new Error('The data files contain no records.');
 
       STATE.all = data.map(normalizeRecord);
-      STATE.meta.loadedAt = new Date();
+      try {
+        const cr = await fetch('./data/coverage.json?v=' + v);
+        STATE.coverage = cr.ok ? await cr.json() : null;
+      } catch (e) { STATE.coverage = null; }
+      mapMinutes();
+      $('btn-coverage').hidden = !STATE.coverage;
+      assignSlugs();
       buildVocabularies();
-
-      // First-load wiring: filter options + column toggles are populated
-      // from STATE.all so the UI cannot present a value the data lacks.
-      populateFilterOptions();
+      populateFilters();
       renderColumnsMenu();
       renderTableHead();
-      renderKPIs();
-
-      applyFilters();         // also calls renderTable + renderPagination
-      stampLastUpdated();
+      renderIntro();
+      const built = formatBuilt(STATE.meta.built);
+      setText('data-compiled', built ? 'Data compiled ' + built + '.' : '');
+      const fromUrl = readUrlFilters();
+      const h = hashValue();
+      if (!fromUrl && !(h === 'all' || STATE.bySlug.has(h.split('/')[0]))) applyDefaultView();
+      applyFilters();
+      route();
     } catch (err) {
-      console.error('[STS Dashboard] data load failed:', err);
+      console.error('[Seed varieties] data load failed:', err);
       showError(err && err.message ? err.message : String(err));
-      STATE.all = [];
-      STATE.filtered = [];
-      renderTable();
-      renderPagination();
-      updateResultCount();
+      STATE.all = []; STATE.filtered = [];
+      renderTable(); renderPagination(); updateResultCount();
     } finally {
       hideLoading();
     }
   }
 
-  // Idempotent: re-running normalizeRecord on its own output is a no-op.
-  // The synthetic underscore-prefixed fields exist only for sort/filter use
-  // and are never persisted back to the source JSON.
   function normalizeRecord(r) {
-    const rec = Object.assign({}, r);
+    const rec = { raw: r };
+    rec.id = String(r.variety_id || '');
+    rec.name = clean(r.variety_name) || 'Unnamed variety';
+    rec.crop = clean(r.crop_clean) || clean(r.crop);
+    const yInt = parseInt(String(r.year_of_release == null ? '' : r.year_of_release), 10);
+    rec.year = Number.isFinite(yInt) && yInt > 1900 ? yInt : null;
 
-    rec.variety_id = String(r.variety_id || '');
-    rec.crop_raw = String(r.crop || '').trim();
-    rec.crop = String(r.crop_clean || r.crop || '').trim();  // canonical crop label (standardize.py); raw CSC/Seednet spelling kept in crop_raw
-    rec._crop_norm = normalizeCropName(r.crop_clean || rec.crop);
-    rec.variety_name = String(r.variety_name || '').trim();
+    // States: full names from the cleaned list, else from codes.
+    const full = (Array.isArray(r.states_full_clean) ? r.states_full_clean : (Array.isArray(r.states_full) ? r.states_full : []))
+      .map(s => String(s || '').replace(/\s*&\s*/g, ' and ').trim()).filter(s => !isBlank(s));
+    const codes = String(r.states_acronyms_clean || r.states_acronyms || '').split(',').map(s => s.trim().toUpperCase())
+      .map(c => ({ TS: 'TG', UTT: 'UK', JAM: 'JK', NCT: 'DL' }[c] || c)).filter(c => STATE_CODE_TO_NAME[c]);
+    rec.stateCodes = uniq(codes);
+    rec.states = full.length ? uniq(full) : rec.stateCodes.map(c => STATE_CODE_TO_NAME[c]);
 
-    // Year: keep original string for display, derive integer for math.
-    const yRaw = r.year_of_release == null ? '' : String(r.year_of_release).trim();
-    rec.year_of_release = yRaw;
-    const yInt = parseInt(yRaw, 10);
-    rec._year_int = Number.isFinite(yInt) ? yInt : NaN;
+    rec.wave = String(r.enrichment_wave || '');
+    rec.researched = !!rec.wave && rec.wave !== 'not_researched';
+    rec.waveLabel = !rec.researched ? '' : /20250808|v2\./.test(rec.wave) ? 'August 2025' : 'October to November 2026';
 
-    rec.stress_tolerance = (r.stress_tolerance === 'Yes' || r.stress_tolerance === 'No')
-      ? r.stress_tolerance : '';
-    rec.key_attributes = String(r.key_attributes || '').trim();
-    rec.states_acronyms = String(r.states_acronyms_clean || r.states_acronyms || '').trim();
-    rec._state_tokens = rec.states_acronyms
-      ? rec.states_acronyms.split(',').map(s => s.trim()).filter(Boolean)
-      : [];
-    rec._state_norm_tokens = rec._state_tokens.map(normalizeStateToken).filter(Boolean);
+    // Stress evidence.
+    const norm = (a) => uniq((Array.isArray(a) ? a : []).map(s => STRESS_NAME[String(s || '').trim().toLowerCase()] || capFirst(String(s || '').trim())));
+    rec.level = String(r.stress_confirmation_level || '');
+    rec.graded = !!EVIDENCE_LABEL[rec.level];
+    rec.evidence = rec.graded ? EVIDENCE_LABEL[rec.level] : 'Not graded';
+    rec.typesConfirmed = norm(r.stress_types_confirmed);
+    rec.typesMulti = norm(r.stress_types_multi_source);
+    rec.typesClaimed = norm(r.stress_types_strict);
+    rec.stressTypes = rec.graded ? rec.typesConfirmed : [];
+    rec.stressText = stressCellText(rec);
+    rec.stressRank = { 'Two or more sources': 0, 'One source': 1, 'Claimed, not confirmed': 2, 'None found': 3 }[rec.evidence];
+    if (rec.stressRank == null) rec.stressRank = 4;
 
-    rec.states_full = Array.isArray(r.states_full_clean)
-      ? r.states_full_clean.slice()
-      : (Array.isArray(r.states_full) ? r.states_full.slice() : []);
-    rec.seasons = String(r.seasons || '').trim();
+    // Seednet.
+    rec.seednetStatus = String(r.seednet_match_status || '');
+    rec.seednetFields = (r.seednet_fields && typeof r.seednet_fields === 'object') ? r.seednet_fields : {};
+    rec.seednetUrl = String((r.official_sources || {}).seednet_url || r.seednet_url || '').trim();
+    rec.hasSeednet = !!r.seednet_available && (!rec.seednetStatus || SEEDNET_CONFIRMED.has(rec.seednetStatus))
+      && (Object.keys(rec.seednetFields).length > 0 || !!rec.seednetUrl);
 
-    // days_to_maturity: schema documented as integer; reality is mixed
-    // free-text. Preserve raw for display, parse first integer for sort.
-    const dRaw = r.days_to_maturity;
-    if (dRaw == null || dRaw === '') {
-      rec._dtm_raw = '';
-      rec._dtm_int = null;
-    } else if (typeof dRaw === 'number' && Number.isFinite(dRaw)) {
-      rec._dtm_raw = String(dRaw);
-      rec._dtm_int = Math.trunc(dRaw);
-    } else {
-      const s = String(dRaw).trim();
-      rec._dtm_raw = s;
-      const m = s.match(/\d+/);
-      rec._dtm_int = m ? parseInt(m[0], 10) : null;
-    }
-    // Override the visible field to use the raw (string-safe) value so the
-    // table cell renderer can stay identical for both numeric and text data.
-    rec.days_to_maturity = rec._dtm_raw;
+    // Where the record comes from. Older builds lack record_source; derive it from the Seednet link.
+    rec.source = SOURCES.indexOf(r.record_source) !== -1 ? r.record_source
+      : (rec.hasSeednet ? 'CSC minutes and Seednet' : 'CSC minutes only');
+    rec.seednetOnly = rec.source === 'Seednet only';
+    if (rec.seednetOnly && (Object.keys(rec.seednetFields).length > 0 || rec.seednetUrl)) rec.hasSeednet = true;
+    rec.outcome = OUTCOMES.indexOf(r.csc_outcome) !== -1 ? r.csc_outcome : (rec.seednetOnly ? 'Not in the CSC minutes held' : 'Not stated');
+    if (rec.seednetOnly && rec.outcome === 'Not stated') rec.outcome = 'Not in the CSC minutes held';
 
-    rec.stress_tolerance_strict = (r.stress_tolerance_strict === 'Yes' || r.stress_tolerance_strict === 'No' || r.stress_tolerance_strict === 'Unknown') ? r.stress_tolerance_strict : '';
-    rec.stress_types_strict = uniq((Array.isArray(r.stress_types_strict) ? r.stress_types_strict : []).map(normStressName));
-    rec.stress_confirmation_level = String(r.stress_confirmation_level || 'Not checked');
-    rec.stress_types_confirmed = uniq((Array.isArray(r.stress_types_confirmed) ? r.stress_types_confirmed : []).map(normStressName));
-    rec.stress_types_multi_source = uniq((Array.isArray(r.stress_types_multi_source) ? r.stress_types_multi_source : []).map(normStressName));
-    rec.stress_confirmation = (r.stress_confirmation && typeof r.stress_confirmation === 'object') ? r.stress_confirmation : {};
-    rec.research_refers_to = String(r.research_refers_to || '');
-    rec.csc_fields = (r.csc_fields && typeof r.csc_fields === 'object') ? r.csc_fields : {};
-    rec.official_sources = (r.official_sources && typeof r.official_sources === 'object') ? r.official_sources : {};
-    rec.contacts_structured = (r.contacts_structured && typeof r.contacts_structured === 'object') ? r.contacts_structured : {};
-    rec.enrichment_wave_raw = String(r.enrichment_wave || '');
-    rec._researched = !!rec.enrichment_wave_raw && rec.enrichment_wave_raw !== 'not_researched';
-    // Table stress column + stress-type filter: independently confirmed types;
-    // until the confirmation pass has run, the research-level list.
-    rec._stress_graded = rec.stress_confirmation_level !== 'Not checked' && rec.stress_confirmation_level !== 'Not researched';
-    rec._stress_types_display = rec._stress_graded ? rec.stress_types_confirmed : rec.stress_types_strict;
-    rec._stress_evidence = rec._stress_graded ? rec.stress_confirmation_level
-      : !rec._researched ? 'Not researched'
-      : (rec.stress_types_strict.length ? 'Reported in research' : 'None found');
-    rec.developer_institution_csc = r.developer_institution_csc || '';
-    const _cs = r.contacts_structured || {};
-    rec.institution_std = String(_cs.institution || r.developer_institution_csc || '').trim();
-    rec.has_contact = ((_cs.emails || []).length || (_cs.phones || []).length || (_cs.breeder_names || []).length) ? 'Yes' : 'No'; rec.developer_location_csc = r.developer_location_csc || '';
-    rec.publications_count = (Number(r.publications_scholar_count) || 0) + (Number(r.publications_openalex_count) || 0);
-    rec.enrichment_wave = !rec.enrichment_wave_raw ? '' : !rec._researched ? 'Official data only'
-      : rec.enrichment_wave_raw.replace('enhanced_v2.1_20250808', 'Aug 2025').replace(/enhanced_v3\.\d_20261022_claude/, 'Oct–Nov 2026');
-    rec.evidence_quality = (r.evidence_quality === 'High' || r.evidence_quality === 'Medium'
-      || r.evidence_quality === 'Low') ? r.evidence_quality : '';
+    // Contacts.
+    const cs = (r.contacts_structured && typeof r.contacts_structured === 'object') ? r.contacts_structured : {};
+    rec.institution = firstText(cs.institution, r.developer_institution_csc, (r.csc_fields || {}).institution, rec.seednetOnly ? deshout(clean(rec.seednetFields['Institution Responsible for developing Breeder Seed'])) : '');
+    rec.hasContact = contactData(r, rec).has ? 'Yes' : 'No';
 
-    // stress_types: spec says "if array empty, split key_attributes". This
-    // protects the stress-type badges and filter even when upstream omits.
-    if (Array.isArray(r.stress_types) && r.stress_types.length) {
-      rec.stress_types = r.stress_types.map(s => String(s).trim()).filter(Boolean);
-    } else if (rec.key_attributes) {
-      rec.stress_types = rec.key_attributes.split(',').map(s => s.trim()).filter(Boolean);
-    } else {
-      rec.stress_types = [];
-    }
+    const pc = (Number(r.publications_scholar_count) || 0) + (Number(r.publications_openalex_count) || 0);
+    rec.pubs = pc > 0 ? pc : null;
 
-    rec.seednet_match = String(r.seednet_match || '');
-    rec.seednet_match_status = String(r.seednet_match_status || '');
-    rec.seednet_candidate = (r.seednet_candidate && typeof r.seednet_candidate === 'object') ? r.seednet_candidate : null;
-    rec.seednet_rematched = r.seednet_rematched === true;
-    rec.seednet_available = !!r.seednet_available;
-    rec.seednet_url = String(r.seednet_url || '').trim();
-    rec.seednet_variety_id = String(r.seednet_variety_id || '').trim();
-    rec.seednet_fields = (r.seednet_fields && typeof r.seednet_fields === 'object')
-      ? r.seednet_fields : {};
-    rec.research_data = (r.research_data && typeof r.research_data === 'object')
-      ? r.research_data : {};
-    rec.search_metadata = (r.search_metadata && typeof r.search_metadata === 'object')
-      ? r.search_metadata : {};
-    rec.query_links = Array.isArray(r.query_links) ? r.query_links.slice() : [];
-    rec.direct_source_links = Array.isArray(r.direct_source_links) ? r.direct_source_links.slice() : [];
-    rec.trusted_stress_types = Array.isArray(r.trusted_stress_types)
-      ? r.trusted_stress_types.slice()
-      : [];
-
-    // Synthesised flag — kept distinct from seednet_available so the UI can
-    // remain usable even if the upstream JSON omits the optional nested
-    // `seednet_fields` object. We treat Seednet as \"available\" only when:
-    //   - seednet_available is true AND
-    //   - there is either a usable seednet_fields payload OR a portal link.
-    const seednetFieldKeys = Object.keys(rec.seednet_fields || {})
-      .filter(k => !SEEDNET_SKIP_KEYS.has(k));
-    rec._has_seednet = !!(rec.seednet_available
-      && (!rec.seednet_match_status || SEEDNET_CONFIRMED.has(rec.seednet_match_status)) && (
-      seednetFieldKeys.length > 0 || rec.seednet_url || rec.seednet_variety_id
-    ));
-    rec._has_research = !!(r.research_data && typeof r.research_data === 'object');
-    rec._search_blob = (
-      rec.variety_name + ' ' + rec.crop + ' ' + rec.key_attributes + ' '
-      + rec.states_acronyms + ' ' + rec.stress_tolerance + ' '
-      + rec.evidence_quality + ' ' + rec.seasons + ' '
-      + flattenText(rec.states_full) + ' '
-      + flattenText(rec.stress_types) + ' '
-      + flattenText(rec.seednet_fields) + ' '
-      + flattenText(rec.csc_fields) + ' '
-      + String(rec.contacts_structured.institution || '') + ' '
-      + flattenText(rec.research_data) + ' '
-      + flattenText(rec.search_metadata)
-    ).toLowerCase();
-
+    rec.search = [rec.name, rec.crop, rec.states.join(' '), rec.institution, rec.stressText, rec.outcome,
+      clean((r.csc_fields || {}).variety_code), clean(rec.seednetFields['Variety Name']), clean(r.key_attributes), clean(r.variety_name_as_printed),
+      Array.isArray(r.search_names) ? r.search_names.map(clean).join(' ') : clean(r.search_names)]
+      .join(' ').toLowerCase();
+    rec.skel = ' ' + skeleton(rec.search);
+    rec.words = ' ' + rec.search.replace(/[^a-z0-9]+/g, ' ') + ' ';
     return rec;
   }
 
+  // Consonant skeleton for spelling-tolerant search ("swarna" finds "Swarana").
+  function skeleton(t) { return String(t).toLowerCase().replace(/[aeiouy]/g, '').replace(/[^a-z0-9]+/g, ' '); }
+
+  function stressCellText(rec) {
+    if (rec.evidence === 'Two or more sources' || rec.evidence === 'One source') {
+      const multi = rec.typesConfirmed.filter(t => rec.typesMulti.indexOf(t) !== -1);
+      const single = rec.typesConfirmed.filter(t => rec.typesMulti.indexOf(t) === -1);
+      const fmt = (arr) => capFirst(listJoin(arr.map((t, i) => i === 0 ? t : t.toLowerCase())));
+      const parts = [];
+      if (multi.length) parts.push(fmt(multi) + ' (two or more sources)');
+      if (single.length) parts.push((parts.length ? listJoin(single.map(t => t.toLowerCase())) : fmt(single)) + ' (one source)');
+      if (!parts.length) return rec.evidence === 'Two or more sources' ? 'Two or more sources' : 'One source';
+      return parts.join('; ');
+    }
+    if (rec.evidence === 'Claimed, not confirmed') return 'Claimed, not confirmed';
+    if (rec.evidence === 'None found') return 'None found';
+    return '';
+  }
+
+  function assignSlugs() {
+    STATE.bySlug = new Map();
+    // Prefer the build's own record_id (clean and unique); fall back to a slug of crop and name.
+    STATE.all.forEach(rec => {
+      const rid = String(rec.raw.record_id || '').trim();
+      if (rid && /^[A-Za-z0-9._~-]+$/.test(rid) && !STATE.bySlug.has(rid) && ['about', 'coverage', 'all'].indexOf(rid) === -1) { rec.slug = rid; STATE.bySlug.set(rid, rec); }
+    });
+    STATE.all.forEach(rec => {
+      if (rec.slug) return;
+      let base = (rec.crop + '-' + rec.name).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'variety';
+      let slug = base, i = 2;
+      while (STATE.bySlug.has(slug) || slug === 'about' || slug === 'coverage' || slug === 'all') slug = base + '-' + (i++);
+      rec.slug = slug;
+      STATE.bySlug.set(slug, rec);
+    });
+  }
+
   function buildVocabularies() {
-    STATE.meta.vocab.crops = uniqSorted(STATE.all.map(r => r._crop_norm || r.crop));
-    STATE.meta.vocab.states = uniqSorted(STATE.all.flatMap(r => r._state_norm_tokens));
-    STATE.meta.vocab.stressTypes = uniqSorted(STATE.all.flatMap(r => r._stress_types_display));
-    STATE.meta.vocab.institutions = uniqSorted(STATE.all.map(r => r.institution_std).filter(Boolean));
+    const all = STATE.all;
+    STATE.meta.vocab = {
+      crops: uniqSorted(all.map(r => r.crop)),
+      states: uniqSorted(all.flatMap(r => r.states)),
+      stressTypes: uniqSorted(all.flatMap(r => r.stressTypes)),
+      institutions: uniqSorted(all.map(r => r.institution))
+    };
   }
 
   /* ------------------------------------------------------------------ *
-   * Filter UI population                                               *
+   * Filters                                                            *
    * ------------------------------------------------------------------ */
 
-  function populateFilterOptions() {
-    fillSelect('filter-crop', STATE.meta.vocab.crops);
-    fillSelect('filter-state', STATE.meta.vocab.states);
-    fillSelect('filter-stress-tol', STATE.meta.vocab.stressTols);
-    fillSelect('filter-evidence', STATE.meta.vocab.evidences);
-    fillSelect('filter-stress-type', STATE.meta.vocab.stressTypes);
-    // Fixed order for the known levels, then any other level present in the data.
-    const levels = new Set(STATE.all.map(r => r.stress_confirmation_level));
-    fillSelect('filter-stress-evidence', VOCAB_STRESS_EVIDENCE.filter(l => levels.has(l))
-      .concat(uniqSorted(Array.from(levels).filter(l => VOCAB_STRESS_EVIDENCE.indexOf(l) === -1))));
-    fillSelect('filter-research', VOCAB_RESEARCH);
-    fillSelect('filter-seednet', VOCAB_SEEDNET);
-    fillSelect('filter-institution', STATE.meta.vocab.institutions);
+  function fillSelect(id, values, labels) {
+    const el = $(id);
+    el.innerHTML = '<option value="">Any</option>' + values.map((v, i) =>
+      '<option value="' + esc(v) + '">' + esc(labels ? labels[i] : v) + '</option>').join('');
+  }
+
+  function populateFilters() {
+    const v = STATE.meta.vocab;
+    const count = (pred) => STATE.all.filter(pred).length;
+    fillSelect('filter-crop', v.crops);
+    fillSelect('filter-state', v.states);
+    fillSelect('filter-stress-type', v.stressTypes);
+    const evPresent = EVIDENCE_ORDER.filter(l => STATE.all.some(r => r.evidence === l));
+    fillSelect('filter-stress-evidence', evPresent, evPresent.map(l => l + ' (' + n(count(r => r.evidence === l)) + ')'));
+    const oc = OUTCOMES.filter(o => STATE.all.some(r => r.outcome === o));
+    fillSelect('filter-outcome', oc, oc.map(o => o + ' (' + n(count(r => r.outcome === o)) + ')'));
+    const srcs = SOURCES.filter(x => STATE.all.some(r => r.source === x));
+    fillSelect('filter-source', srcs, srcs.map(x => x + ' (' + n(count(r => r.source === x)) + ')'));
     fillSelect('filter-contact', ['Yes', 'No']);
-
-    // Seed the year-range placeholders with the actual min/max so users
-    // know the legitimate bounds without us having to label them inline.
-    const years = STATE.all.map(r => r._year_int).filter(Number.isFinite);
+    fillSelect('filter-research', ['Yes', 'No'], ['Yes', 'Official record only']);
+    fillSelect('filter-seednet', ['Linked', 'Not linked']);
+    $('institution-list').innerHTML = v.institutions.map(i => '<option value="' + esc(i) + '"></option>').join('');
+    const years = STATE.all.map(r => r.year).filter(Boolean);
     if (years.length) {
-      const yMin = Math.min(...years), yMax = Math.max(...years);
-      $('filter-year-min').placeholder = 'From (' + yMin + ')';
-      $('filter-year-max').placeholder = 'To (' + yMax + ')';
+      $('filter-year-min').placeholder = 'From ' + Math.min.apply(null, years);
+      $('filter-year-max').placeholder = 'To ' + Math.max.apply(null, years);
     }
   }
-
-  function fillSelect(id, values) {
-    const el = $(id);
-    if (!el) return;
-    if (id === 'filter-state') {
-      el.innerHTML = (el.multiple ? '' : '<option value="">All</option>') + values
-        .map(v => '<option value="' + esc(v) + '">' + esc((STATE_CODE_TO_NAME[v] || v) + ' (' + v + ')') + '</option>')
-        .join('');
-      return;
-    }
-    const allOpt = el.multiple ? '' : '<option value="">All</option>';
-    el.innerHTML = allOpt + values.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
-  }
-
-  function getSelectedMulti(id) {
-    const el = $(id);
-    return el ? Array.from(el.selectedOptions).map(o => o.value).filter(v => v !== '') : [];
-  }
-
-  /* ------------------------------------------------------------------ *
-   * Filter pipeline                                                    *
-   * ------------------------------------------------------------------ */
 
   function applyFilters() {
     const q = ($('filter-search').value || '').trim().toLowerCase();
-    const qTokens = q ? q.split(/\s+/).filter(Boolean) : [];
-    const crops = getSelectedMulti('filter-crop');
-    const states = getSelectedMulti('filter-state');
-    const stressTols = getSelectedMulti('filter-stress-tol');
-    const evidences = getSelectedMulti('filter-evidence');
-    const stressTypes = getSelectedMulti('filter-stress-type');
-    const stressEv = getSelectedMulti('filter-stress-evidence');
-    const research = getSelectedMulti('filter-research');
-    const seednet = getSelectedMulti('filter-seednet');
-    const institutions = getSelectedMulti('filter-institution');
-    const contacts = getSelectedMulti('filter-contact');
-    const yMin = parseInt($('filter-year-min').value, 10);
-    const yMax = parseInt($('filter-year-max').value, 10);
-    const yMinSet = Number.isFinite(yMin);
-    const yMaxSet = Number.isFinite(yMax);
+    const tokens = q ? q.split(/\s+/) : [];
+    const shortTok = tokens.map(t => (t.length <= 3 || /^\d+$/.test(t)) ? t.replace(/[^a-z0-9]+/g, '') : '');
+    const skelTokens = tokens.map(t => /^[a-z]{4,}$/.test(t) ? skeleton(t).trim() : '');
+    const minutesKey = $('filter-minutes').value;
+    const val = (id) => $(id).value;
+    const crop = val('filter-crop'), st = val('filter-state'), stype = val('filter-stress-type'),
+      ev = val('filter-stress-evidence'), oc = val('filter-outcome'), contact = val('filter-contact'),
+      res = val('filter-research'), sn = val('filter-seednet'), source = val('filter-source');
+    const inst = ($('filter-institution').value || '').trim().toLowerCase();
+    const yMin = parseInt($('filter-year-min').value, 10), yMax = parseInt($('filter-year-max').value, 10);
 
-    STATE.filtered = STATE.all.filter(r => {
-      // 1. Search.
-      if (q) {
-        // "Nicer" search semantics:
-        // - single term behaves broad (substring anywhere in prebuilt blob)
-        // - multiple terms are AND-combined, improving precision for long
-        //   queries like "rice drought Punjab high evidence".
-        const hay = r._search_blob || '';
-        if (qTokens.length <= 1) {
-          if (hay.indexOf(q) === -1) return false;
-        } else {
-          for (let i = 0; i < qTokens.length; i++) {
-            if (hay.indexOf(qTokens[i]) === -1) return false;
-          }
-        }
+    // Exact matching first; the spelling-tolerant match is used only when nothing matches exactly.
+    const runFilter = (fuzzy) => STATE.all.filter(r => {
+      for (let i = 0; i < tokens.length; i++) {
+        // Short or numeric tokens ("co", "51") must be whole words; longer ones may match anywhere.
+        if (shortTok[i] ? r.words.indexOf(' ' + shortTok[i] + ' ') !== -1 : r.search.indexOf(tokens[i]) !== -1) continue;
+        if (fuzzy && skelTokens[i] && r.skel.indexOf(' ' + skelTokens[i]) !== -1) continue;
+        return false;
       }
-      // 2. Crop.
-      if (crops.length && crops.indexOf(r._crop_norm || r.crop) === -1) return false;
-      // 3. State (any token match).
-      if (states.length && !r._state_norm_tokens.some(t => states.indexOf(t) !== -1)) return false;
-      // 4. Stress tolerance.
-      if (stressTols.length && stressTols.indexOf(r.stress_tolerance) === -1) return false;
-      // 5. Evidence quality.
-      if (evidences.length && evidences.indexOf(r.evidence_quality) === -1) return false;
-      // 6. Stress type (any match).
-      if (stressTypes.length && !stressTypes.some(t => r._stress_types_display.indexOf(t) !== -1)) return false;
-      // 7. Stress evidence level, research status, Seednet link.
-      if (stressEv.length && stressEv.indexOf(r.stress_confirmation_level) === -1) return false;
-      if (research.length && research.indexOf(r._researched ? 'Researched' : 'Official data only') === -1) return false;
-      if (seednet.length && seednet.indexOf(r._has_seednet ? 'Linked' : 'Not linked') === -1) return false;
-      if (institutions.length && institutions.indexOf(r.institution_std) === -1) return false;
-      if (contacts.length && contacts.indexOf(r.has_contact) === -1) return false;
-      // 8. Year range. Records with no parseable year drop out only when
-      //    a bound is set, so the default "no range" view shows everything.
-      if (yMinSet || yMaxSet) {
-        if (!Number.isFinite(r._year_int)) return false;
-        if (yMinSet && r._year_int < yMin) return false;
-        if (yMaxSet && r._year_int > yMax) return false;
+      if (crop && r.crop !== crop) return false;
+      if (st && r.states.indexOf(st) === -1) return false;
+      if (stype && r.stressTypes.indexOf(stype) === -1) return false;
+      if (ev && r.evidence !== ev) return false;
+      if (oc && r.outcome !== oc) return false;
+      if (source && r.source !== source) return false;
+      if (minutesKey && r.minutesKey !== minutesKey) return false;
+      if (contact && r.hasContact !== contact) return false;
+      if (res && (r.researched ? 'Yes' : 'No') !== res) return false;
+      if (sn && (r.hasSeednet ? 'Linked' : 'Not linked') !== sn) return false;
+      if (inst && r.institution.toLowerCase().indexOf(inst) === -1) return false;
+      if (Number.isFinite(yMin) || Number.isFinite(yMax)) {
+        if (!r.year) return false;
+        if (Number.isFinite(yMin) && r.year < yMin) return false;
+        if (Number.isFinite(yMax) && r.year > yMax) return false;
       }
       return true;
     });
-
+    STATE.filtered = runFilter(false);
+    if (!STATE.filtered.length && skelTokens.some(Boolean)) STATE.filtered = runFilter(true);
     STATE.page.index = 1;
-    renderTable();
-    renderPagination();
-    updateResultCount();
+    STATE.sorted = null;
+    renderTable(); renderPagination(); updateResultCount(); updateFilterSummary();
+    syncUrl();
+  }
+
+  function hashValue() {
+    try { return decodeURIComponent((location.hash || '').replace(/^#/, '')); } catch (e) { return ''; }
+  }
+  function readUrlFilters() {
+    const sp = new URLSearchParams(location.search);
+    let any = false;
+    URL_KEYS.forEach(([k, id]) => {
+      if (!sp.has(k)) return;
+      const el = $(id), v = sp.get(k);
+      el.value = v;
+      if (el.tagName === 'SELECT' && el.value !== v) el.value = '';
+      if (id === 'filter-minutes' && !STATE.minutesByKey.has(v)) el.value = '';
+      if (el.value) any = true;
+    });
+    return any;
+  }
+  function syncUrl() {
+    const sp = new URLSearchParams();
+    URL_KEYS.forEach(([k, id]) => { const v = ($(id).value || '').trim(); if (v) sp.set(k, v); });
+    const qs = sp.toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+  }
+  function applyDefaultView() {
+    if (STATE.meta.vocab.crops.indexOf(DEFAULT_VIEW.crop) === -1) return;
+    $('filter-crop').value = DEFAULT_VIEW.crop;
+    $('filter-research').value = DEFAULT_VIEW.researched;
+  }
+  function isDefaultView() {
+    return $('filter-crop').value === DEFAULT_VIEW.crop && $('filter-research').value === DEFAULT_VIEW.researched && activeFilterCount() === 2;
+  }
+
+  function activeFilterCount() {
+    let c = SELECT_FILTERS.filter(id => $(id).value).length;
+    ['filter-search', 'filter-institution', 'filter-year-min', 'filter-year-max', 'filter-minutes'].forEach(id => { if (($(id).value || '').trim()) c++; });
+    return c;
+  }
+  function updateFilterSummary() {
+    const c = activeFilterCount();
+    setText('filter-summary', c ? 'Filter the list (' + c + ' active)' : 'Filter the list');
   }
 
   function resetFilters() {
-    SELECT_FILTER_IDS.forEach(id => { const el = $(id); if (el) el.value = ''; });
-    $('filter-search').value = '';
-    $('filter-year-min').value = '';
-    $('filter-year-max').value = '';
-    STATE.sort = { key: null, dir: 'asc' };
+    SELECT_FILTERS.forEach(id => { $(id).value = ''; });
+    ['filter-search', 'filter-institution', 'filter-year-min', 'filter-year-max', 'filter-minutes'].forEach(id => { $(id).value = ''; });
+    STATE.sort = { key: 'crop', dir: 'asc' };
+    STATE.sorted = null;
     renderTableHead();
     applyFilters();
   }
 
   /* ------------------------------------------------------------------ *
-   * Render: KPIs                                                       *
+   * Intro and counts                                                   *
    * ------------------------------------------------------------------ */
 
-  // Counts shared by the intro paragraph and the About dialog. Always
-  // derived from the loaded records, never hard-coded.
   function datasetStats() {
     const all = STATE.all;
-    const years = all.map(r => r._year_int).filter(Number.isFinite);
-    const researched = all.filter(r => r._researched);
-    const checked = researched.filter(r => r._stress_graded);
-    const lvl = {};
-    VOCAB_STRESS_EVIDENCE.forEach(l => { lvl[l] = researched.filter(r => r.stress_confirmation_level === l).length; });
+    const years = all.map(r => r.year).filter(Boolean);
+    const researched = all.filter(r => r.researched);
+    const oc = {}; OUTCOMES.forEach(o => { oc[o] = all.filter(r => r.outcome === o).length; });
+    // Stress counts over all records, as in the Stress evidence filter; the official-only part is reported separately.
+    const ev = {}, evOfficial = {};
+    EVIDENCE_ORDER.forEach(l => { ev[l] = all.filter(r => r.evidence === l).length; evOfficial[l] = all.filter(r => !r.researched && r.evidence === l).length; });
+    const src = {}; SOURCES.forEach(x => { src[x] = all.filter(r => r.source === x).length; });
     return {
       total: all.length,
-      yMin: years.length ? Math.min(...years) : '',
-      yMax: years.length ? Math.max(...years) : '',
-      crops: new Set(all.map(r => r._crop_norm || r.crop).filter(Boolean)).size,
-      states: STATE.meta.vocab.states.length,
-      seednet: all.filter(r => r._has_seednet).length,
-      seednetSpelling: all.filter(r => r._has_seednet && r.seednet_match_status === 'confirmed_spelling').length,
-      differentVariety: all.filter(r => r.seednet_match_status === 'different_variety').length,
+      yMin: years.length ? Math.min.apply(null, years) : '', yMax: years.length ? Math.max.apply(null, years) : '',
+      crops: STATE.meta.vocab.crops.length, states: STATE.meta.vocab.states.length,
+      outcome: oc,
+      seednet: all.filter(r => r.hasSeednet).length,
+      seednetSpelling: all.filter(r => r.hasSeednet && r.seednetStatus === 'confirmed_spelling').length,
+      differentVariety: all.filter(r => r.seednetStatus === 'different_variety').length,
       researched: researched.length,
-      waveAug: researched.filter(r => r.enrichment_wave === 'Aug 2025').length,
-      waveOct: researched.filter(r => r.enrichment_wave === 'Oct–Nov 2026').length,
+      waveAug: researched.filter(r => r.waveLabel === 'August 2025').length,
+      waveOct: researched.filter(r => r.waveLabel === 'October to November 2026').length,
       notResearched: all.length - researched.length,
-      checked: checked.length,
-      stressOne: researched.filter(r => r.stress_confirmation_level === 'Confirmed by 2+ sources' || r.stress_confirmation_level === 'Single source').length,
-      stressTwo: researched.filter(r => r.stress_confirmation_level === 'Confirmed by 2+ sources').length,
-      stressReported: researched.filter(r => r.stress_types_strict.length).length,
-      levels: lvl,
-      officialGraded: all.filter(r => !r._researched && r._stress_graded).length,
-      withContact: all.filter(r => r.has_contact === 'Yes').length
+      ev: ev, evOfficial: evOfficial, src: src,
+      inCsc: src['CSC minutes and Seednet'] + src['CSC minutes only'],
+      officialGraded: all.filter(r => !r.researched && r.graded).length,
+      officialGradedYes: all.filter(r => !r.researched && (r.evidence === 'Two or more sources' || r.evidence === 'One source')).length,
+      withContact: all.filter(r => r.hasContact === 'Yes').length,
+      withPubs: all.filter(r => r.pubs).length,
+      supported: all.filter(r => r.evidence === 'Two or more sources' || r.evidence === 'One source').length,
+      noteDisputes: all.filter(r => !isBlank(r.raw.stress_confirmation_note) && (r.evidence === 'Two or more sources' || r.evidence === 'One source')).length
     };
   }
 
+  function outcomeSentence(s) {
+    const o = s.outcome;
+    if (!s.inCsc) return '';
+    if (o['Not stated'] === s.inCsc) return 'This build does not yet record the outcome of each consideration by the CSC.';
+    const parts = [];
+    if (o.Approved) parts.push(n(o.Approved) + ' were approved');
+    if (o.Deferred) parts.push(n(o.Deferred) + ' deferred');
+    if (o.Rejected) parts.push(n(o.Rejected) + ' rejected');
+    let t = 'Of the ' + n(s.inCsc) + ' varieties in the CSC minutes, ' + listJoin(parts);
+    if (o['Not stated']) t += ', and for ' + n(o['Not stated']) + ' the minutes do not state the outcome';
+    return t + '.';
+  }
+
+  function sourceSentence(s) {
+    const src = s.src, parts = [];
+    if (src['CSC minutes and Seednet']) parts.push(n(src['CSC minutes and Seednet']) + ' appear in the minutes of the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC) that this dataset holds and are also notified on Seednet, the Government of India seed portal');
+    if (src['CSC minutes only']) parts.push(n(src['CSC minutes only']) + ' appear only in the CSC minutes held');
+    if (src['Seednet only']) parts.push(n(src['Seednet only']) + ' are notified on Seednet but do not appear in the CSC minutes held');
+    const joined = parts.length === 3 ? parts[0] + '; ' + parts[1] + '; and ' + parts[2] : parts.length === 2 ? parts[0] + ', and ' + parts[1] : parts.join('');
+    return 'This page lists ' + n(s.total) + ' crop varieties. Of these, ' + joined + '.';
+  }
+  function stressSentence(s) {
+    const two = s.ev['Two or more sources'], one = s.ev['One source'];
+    const twoO = s.evOfficial['Two or more sources'], oneO = s.evOfficial['One source'];
+    let t = 'Of all ' + n(s.total) + ', ' + n(two) + ' have a tolerance of drought, heat, salinity, flood or submergence supported by two or more independent sources naming the variety, and ' + n(one) + ' by one such source.';
+    if (twoO || oneO) t += ' Of these, ' + n(twoO) + ' and ' + n(oneO) + ' respectively were graded from the official Seednet text alone, because the variety has not been researched on the web.';
+    return t;
+  }
+
   function renderIntro() {
-    const el = $('intro-text');
-    if (!el || !STATE.all.length) return;
     const s = datasetStats();
-    const n = v => Number(v).toLocaleString();
-    const span = s.yMin && s.yMax ? ', ' + s.yMin + '–' + s.yMax : '';
-    const stress = s.checked
-      ? n(s.stressOne) + ' of those have stress tolerance (drought, heat, salinity, flood, submergence) supported by at least one source naming the variety, ' + n(s.stressTwo) + ' by two or more.'
-      : n(s.stressReported) + ' of those report stress tolerance (drought, heat, salinity, flood, submergence) in the cited research; the independent-source check has not been run on this build.';
-    el.innerHTML = 'Seed variety dashboard of <strong id="about-count">' + n(s.total) + '</strong> crop varieties considered by the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC)' + esc(span) + '. '
-      + n(s.seednet) + ' are linked to their Seednet (Government of India) record by exact name and crop; '
-      + n(s.researched) + ' have web research (two waves, Aug 2025 and Oct–Nov 2026) and ' + esc(stress) + ' '
-      + 'Every record names its official source document, and contact details of the developing institution where published.';
-  }
-
-  function renderKPIs() {
-    renderIntro();
-    const all = STATE.all;
-    const total = all.length;
-    const stressYes = all.filter(r => r.stress_tolerance === 'Yes').length;
-    const stressStrict = all.filter(r => r.stress_tolerance_strict === 'Yes').length;
-    const highEv = all.filter(r => r.evidence_quality === 'High').length;
-    const crops = new Set(all.map(r => r.crop).filter(Boolean)).size;
-    const withPubs = all.filter(r => r.publications_count > 0).length;
-
-    [['kpi-total', total], ['kpi-stress', stressYes], ['kpi-stress-strict', stressStrict], ['kpi-pubs', withPubs],
-     ['kpi-high-ev', highEv], ['kpi-crops', crops]].forEach(([id, val]) => {
-      const el = $(id);
-      if (el) {
-        el.textContent = val.toLocaleString();
-        el.removeAttribute('aria-busy');
-      }
-    });
-  }
-
-  function stampLastUpdated() {
-    if (!STATE.meta.loadedAt) return;
-    const d = STATE.meta.loadedAt;
-    const el = $('last-updated');
-    if (!el) return;
-    el.dateTime = d.toISOString();
-    el.textContent = d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    $('intro-text').textContent =
+      sourceSentence(s) + ' '
+      + (s.yMin && s.yMax ? 'Their years, the year of the CSC meeting or, for varieties found only on Seednet, the year of release, run from ' + s.yMin + ' to ' + s.yMax + '. ' : '')
+      + (outcomeSentence(s) ? outcomeSentence(s) + ' ' : '')
+      + 'Coverage is uneven. ' + n(s.researched) + ' of ' + n(s.total) + ' varieties have been researched on the web; the other ' + n(s.notResearched) + ' have the official record only. '
+      + stressSentence(s) + ' '
+      + 'Contact details of the developing institution are available for ' + n(s.withContact) + ' of ' + n(s.total) + ' varieties. '
+      + 'A blank cell means the source does not state the value; it never means zero or none.';
+    $('intro-note').innerHTML = esc('Open a row to see the full record, the contacts of the developing institution and the sources. '
+      + 'The research summaries were written by language models from web searches in August 2025 and in October and November 2026, and each cites its sources. They are leads to check against those sources, not official data.')
+      + (STATE.coverage ? ' See <a href="#coverage">Coverage</a> for the list of minutes held.' : '');
   }
 
   function updateResultCount() {
-    const total = STATE.all.length;
-    const shown = STATE.filtered.length;
-    if (!total) {
-      setText('result-count', 'No varieties loaded.');
-    } else if (shown === total) {
-      setText('result-count', 'Showing all ' + total.toLocaleString() + ' varieties');
-    } else {
-      setText('result-count',
-        'Showing ' + shown.toLocaleString() + ' of ' + total.toLocaleString() + ' varieties');
+    const total = STATE.all.length, shown = STATE.filtered.length;
+    const el = $('result-count');
+    if (total && isDefaultView()) {
+      el.innerHTML = 'Showing the ' + n(shown) + ' ' + esc(DEFAULT_VIEW.crop.toLowerCase()) + ' varieties that have web research, of '
+        + n(total) + ' varieties in all. <a href="#all" id="default-clear">Clear the filters</a> to see every crop.';
+      return;
     }
+    const mk = $('filter-minutes').value;
+    if (total && mk && STATE.minutesByKey.has(mk)) {
+      el.innerHTML = 'Showing ' + n(shown) + ' of ' + n(total) + ' varieties, limited to those from ' + esc(minutesName(STATE.minutesByKey.get(mk))) + '. <a href="#" id="minutes-clear">Show all minutes again</a>.';
+      $('minutes-clear').addEventListener('click', (e) => { e.preventDefault(); $('filter-minutes').value = ''; applyFilters(); });
+      return;
+    }
+    el.textContent = !total ? 'No varieties loaded.' : 'Showing ' + n(shown) + ' of ' + n(total) + ' varieties';
   }
 
   /* ------------------------------------------------------------------ *
-   * Render: Columns menu + table head                                  *
+   * Table                                                              *
    * ------------------------------------------------------------------ */
 
   function renderColumnsMenu() {
     const menu = $('columns-menu');
-    menu.innerHTML = COLUMNS.map(c => {
-      const checked = STATE.columns[c.key] ? 'checked' : '';
-      const disabled = c.alwaysVisible ? 'disabled' : '';
-      return '<label class="dropdown__item">'
-        + '<input type="checkbox" data-col="' + esc(c.key) + '" ' + checked + ' ' + disabled + ' />'
-        + ' ' + esc(c.label) + (c.alwaysVisible ? ' <span class="dropdown__pin">always on</span>' : '')
-        + '</label>';
-    }).join('');
-    menu.querySelectorAll('input[data-col]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        STATE.columns[cb.dataset.col] = cb.checked;
-        renderTableHead();
-        renderTable();
-      });
-    });
+    menu.innerHTML = '<p class="dropdown__note">Columns shown in the list</p>' + COLUMNS.map(c =>
+      '<label class="dropdown__item"><input type="checkbox" data-col="' + esc(c.key) + '"'
+      + (STATE.columns[c.key] ? ' checked' : '') + (c.alwaysVisible ? ' disabled' : '') + '> '
+      + esc(c.label) + (c.alwaysVisible ? ' (always shown)' : '') + '</label>').join('');
+    menu.querySelectorAll('input[data-col]').forEach(cb => cb.addEventListener('change', () => {
+      STATE.columns[cb.dataset.col] = cb.checked; renderTableHead(); renderTable();
+    }));
   }
 
   function renderTableHead() {
     const thead = $('tbl-varieties').querySelector('thead');
-    thead.innerHTML = '<tr>' + COLUMNS
-      .filter(c => STATE.columns[c.key])
-      .map(c => {
-        const isSorted = STATE.sort.key === c.key;
-        const ariaSort = isSorted ? (STATE.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
-        const indicator = isSorted ? (STATE.sort.dir === 'asc' ? '▲' : '▼') : '';
-        return '<th scope="col" data-key="' + esc(c.key) + '" tabindex="0" '
-          + 'role="columnheader" aria-sort="' + ariaSort + '" class="th-sort">'
-          + '<span class="th-sort__label">' + esc(c.label) + '</span>'
-          + '<span class="th-sort__indicator" aria-hidden="true">' + indicator + '</span>'
-          + '</th>';
-      }).join('') + '</tr>';
+    thead.innerHTML = '<tr>' + COLUMNS.filter(c => STATE.columns[c.key]).map(c => {
+      const sorted = STATE.sort.key === c.key;
+      const aria = sorted ? (STATE.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
+      return '<th scope="col" aria-sort="' + aria + '" class="th-' + c.key + '"><button type="button" class="th-sort" data-key="' + esc(c.key) + '">'
+        + esc(c.label) + '<span class="th-sort__ind" aria-hidden="true">' + (sorted ? (STATE.sort.dir === 'asc' ? ' ↑' : ' ↓') : '') + '</span></button></th>';
+    }).join('') + '</tr>';
+    thead.querySelectorAll('.th-sort').forEach(b => b.addEventListener('click', () => {
+      const k = b.dataset.key;
+      STATE.sort = STATE.sort.key === k ? { key: k, dir: STATE.sort.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' };
+      STATE.sorted = null; STATE.page.index = 1;
+      renderTableHead(); renderTable(); renderPagination();
+      const again = thead.querySelector('.th-sort[data-key="' + k + '"]'); if (again) again.focus();
+    }));
+  }
 
-    thead.querySelectorAll('th[data-key]').forEach(th => {
-      th.addEventListener('click', () => onSortClick(th.dataset.key));
-      th.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onSortClick(th.dataset.key);
-        }
-      });
+  function statesText(rec) {
+    const s = rec.states;
+    if (s.length <= 3) return listJoin(s);
+    return s.slice(0, 3).join(', ') + ' and ' + (s.length - 3) + ' more';
+  }
+
+  function cellText(key, r) {
+    switch (key) {
+      case 'crop': return r.crop;
+      case 'variety': return r.name.replace(/-/g, '\u2011');
+      case 'year': return r.year ? String(r.year) : '';
+      case 'outcome': return r.outcome === 'Not stated' ? '' : r.outcome;
+      case 'stress': return r.stressText;
+      case 'states': return statesText(r);
+      case 'seednet': return r.hasSeednet ? 'Linked' : '';
+      case 'institution': return r.institution;
+      case 'pubs': return r.pubs ? n(r.pubs) : '';
+      default: return '';
+    }
+  }
+
+  function sortValue(key, r) {
+    switch (key) {
+      case 'year': return r.year;
+      case 'pubs': return r.pubs;
+      case 'stress': return r.stressRank === 4 ? null : r.stressRank;
+      case 'outcome': return r.outcome === 'Not stated' ? null : OUTCOMES.indexOf(r.outcome);
+      case 'source': return SOURCES.indexOf(r.source);
+      case 'states': return r.states.length ? r.states.join(', ') : null;
+      case 'seednet': return r.hasSeednet ? 0 : null;
+      default: { const t = cellText(key, r); return t ? t : null; }
+    }
+  }
+
+  function sortData(data) {
+    const { key, dir } = STATE.sort;
+    if (!key) return data;
+    const mul = dir === 'desc' ? -1 : 1;
+    const coll = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+    return data.slice().sort((a, b) => {
+      const av = sortValue(key, a), bv = sortValue(key, b);
+      if (av == null && bv == null) return coll.compare(a.name, b.name);
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const c = (typeof av === 'number' && typeof bv === 'number') ? av - bv : coll.compare(String(av), String(bv));
+      return c ? c * mul : coll.compare(a.name, b.name);
     });
   }
-
-  function onSortClick(key) {
-    if (STATE.sort.key === key) {
-      STATE.sort.dir = STATE.sort.dir === 'asc' ? 'desc' : 'asc';
-    } else {
-      STATE.sort = { key: key, dir: 'asc' };
-    }
-    renderTableHead();
-    renderTable();
-  }
-
-  /* ------------------------------------------------------------------ *
-   * Render: table body + pagination                                    *
-   * ------------------------------------------------------------------ */
 
   function renderTable() {
     const tbody = $('tbl-varieties').querySelector('tbody');
-    let data = STATE.filtered.slice();
-    if (STATE.sort.key) data = sortData(data, STATE.sort.key, STATE.sort.dir);
-
-    const visibleCols = COLUMNS.filter(c => STATE.columns[c.key]);
-
-    if (!STATE.all.length) {
-      tbody.innerHTML = '<tr><td class="empty-row" colspan="' + visibleCols.length + '">'
-        + 'No data loaded.</td></tr>';
-      return;
-    }
+    const cols = COLUMNS.filter(c => STATE.columns[c.key]);
+    if (!STATE.all.length) { tbody.innerHTML = '<tr><td class="empty" colspan="' + cols.length + '">No data loaded.</td></tr>'; return; }
+    if (!STATE.sorted) STATE.sorted = sortData(STATE.filtered);
+    const data = STATE.sorted;
     if (!data.length) {
-      tbody.innerHTML = '<tr><td class="empty-row" colspan="' + visibleCols.length + '">'
-        + '<div class="empty-row__inner">'
-        + '<p class="empty-row__title">No varieties match the current filters.</p>'
-        + '<button id="btn-empty-reset" type="button" class="btn btn--primary">Reset filters</button>'
-        + '</div></td></tr>';
-      const reset = $('btn-empty-reset');
-      if (reset) reset.addEventListener('click', resetFilters);
+      tbody.innerHTML = '<tr><td class="empty" colspan="' + cols.length + '"><p>No varieties match the current filters.</p>'
+        + '<button id="btn-empty-reset" type="button" class="btn-link">Clear all filters</button></td></tr>';
+      $('btn-empty-reset').addEventListener('click', resetFilters);
       return;
     }
-
     const start = (STATE.page.index - 1) * STATE.page.size;
-    const pageItems = data.slice(start, start + STATE.page.size);
-
-    tbody.innerHTML = pageItems.map((r, i) =>
-      '<tr class="data-row" data-record-id="' + esc(r.variety_id) + '" tabindex="0" '
-      + 'aria-label="Open details for ' + esc(r.variety_name || 'variety') + '">'
-      + visibleCols.map(c => '<td class="td-' + esc(c.key) + '">' + renderCell(c.key, r) + '</td>').join('')
-      + '</tr>'
-    ).join('');
-
-    tbody.querySelectorAll('.data-row').forEach(tr => {
-      tr.addEventListener('click', () => openVarietyModal(tr.dataset.recordId));
-      tr.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          openVarietyModal(tr.dataset.recordId);
-        }
-      });
-    });
-  }
-
-  function renderCell(key, r) {
-    switch (key) {
-      case 'crop':            return esc(r.crop || '—');
-      case 'variety_name':    return '<span class="cell-variety">' + esc(r.variety_name || '—') + '</span>';
-      case 'year_of_release': return r.year_of_release ? esc(r.year_of_release) : '—';
-      case '_stress_evidence': {
-        const v = r._stress_evidence;
-        if (v === 'Confirmed by 2+ sources' || v === 'Single source' || v === 'Reported in research') return '<span class="badge badge--yes">' + esc(v) + '</span>';
-        if (v === 'Claimed, not confirmed') return '<span class="badge">' + esc(v) + '</span>';
-        return '<span class="muted">' + esc(v) + '</span>';
-      }
-      case '_stress_types_display':
-        return r._stress_types_display.length ? r._stress_types_display.map(t => '<span class="badge badge--attr">' + esc(t) + '</span>').join(' ') : '<span class="muted">' + (r._researched ? 'none found' : '—') + '</span>';
-      case 'publications_count':
-        return r.publications_count ? esc(String(r.publications_count)) : '<span class="muted">0</span>';
-      case 'enrichment_wave':
-        return esc(r.enrichment_wave || '');
-      case 'stress_tolerance': {
-        const v = r.stress_tolerance;
-        const cls = v === 'Yes' ? 'badge--stress-yes'
-                  : v === 'No'  ? 'badge--stress-no'
-                                : 'badge--neutral';
-        return '<span class="badge ' + cls + '">' + esc(v || 'Unknown') + '</span>';
-      }
-      case 'stress_types': {
-        if (!r.stress_types.length) return '<span class="muted">—</span>';
-        const head = r.stress_types.slice(0, 3)
-          .map(t => '<span class="badge badge--stress-type">' + esc(t) + '</span>').join(' ');
-        const more = r.stress_types.length > 3
-          ? ' <span class="badge badge--more" title="' + esc(r.stress_types.slice(3).join(', ')) + '">'
-              + '+' + (r.stress_types.length - 3) + ' more</span>'
-          : '';
-        return head + more;
-      }
-      case 'states_acronyms': {
-        // Show full state names truncated to ~40 chars, with the full set
-        // available as title text for accessibility/discovery.
-        const full = (r.states_full || []).join(', ');
-        const code = r.states_acronyms || '—';
-        const names = r.states_full || [];
-        const display = names.length > 4 ? names.slice(0, 4).join(', ') + ' +' + (names.length - 4) + ' more' : (full || code);
-        return '<span class="cell-states" title="' + esc(full || code) + '">' + esc(display) + '</span>';
-      }
-      case 'seasons':           return r.seasons ? esc(r.seasons) : '—';
-      case 'days_to_maturity': {
-        const raw = r._dtm_raw;
-        if (!raw) return '<span class="muted">—</span>';
-        // If the raw value is a "Not specified…" sentinel, render muted
-        // so the reader can quickly distinguish absent vs informative data.
-        const muted = /not specified/i.test(raw);
-        return muted ? '<span class="muted">' + esc(raw) + '</span>' : esc(raw);
-      }
-      case 'evidence_quality': {
-        const v = r.evidence_quality;
-        const cls = v === 'High' ? 'badge--ev-high'
-                  : v === 'Medium' ? 'badge--ev-medium'
-                  : v === 'Low' ? 'badge--ev-low'
-                                : 'badge--neutral';
-        return '<span class="badge ' + cls + '">' + esc(v || 'Unknown') + '</span>';
-      }
-      case 'seednet_available':
-        return r._has_seednet
-          ? '<span class="dot dot--seednet" title="Seednet record available" aria-label="Seednet available"></span>'
-          : '<span class="dot dot--off" aria-label="No Seednet record"></span>';
-      default:
-        return esc(r[key] != null ? r[key] : '—');
-    }
-  }
-
-  // Sort with stable null-to-bottom semantics regardless of direction.
-  // Numeric keys (year, dtm) compare as numbers; everything else collates
-  // case-insensitively via Intl.
-  function sortData(data, key, dir) {
-    const mul = dir === 'desc' ? -1 : 1;
-    const numericKey = key === 'year_of_release' ? '_year_int'
-                     : key === 'days_to_maturity' ? '_dtm_int' : null;
-    const isBool = key === 'seednet_available';
-    const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
-
-    return data.slice().sort((a, b) => {
-      let av, bv, aNull, bNull;
-      if (numericKey) {
-        av = a[numericKey]; bv = b[numericKey];
-        aNull = av == null || (typeof av === 'number' && !Number.isFinite(av));
-        bNull = bv == null || (typeof bv === 'number' && !Number.isFinite(bv));
-      } else if (isBool) {
-        av = a[key] ? 1 : 0; bv = b[key] ? 1 : 0;
-        aNull = false; bNull = false;
-      } else if (Array.isArray(a[key]) || Array.isArray(b[key])) {
-        av = (a[key] || []).join(', ');
-        bv = (b[key] || []).join(', ');
-        aNull = !av; bNull = !bv;
-      } else {
-        av = a[key]; bv = b[key];
-        aNull = av == null || av === ''; bNull = bv == null || bv === '';
-      }
-      // Null-to-bottom irrespective of direction (spec).
-      if (aNull && bNull) return 0;
-      if (aNull) return 1;
-      if (bNull) return -1;
-      if (numericKey || isBool) return (av - bv) * mul;
-      return collator.compare(String(av), String(bv)) * mul;
-    });
+    tbody.innerHTML = data.slice(start, start + STATE.page.size).map(r =>
+      '<tr class="data-row" data-slug="' + esc(r.slug) + '">'
+      + cols.map(c => {
+        const t = cellText(c.key, r);
+        const inner = c.key === 'variety'
+          ? '<a class="row-link" href="#' + esc(r.slug) + '">' + esc(t) + '</a>'
+          : esc(t);
+        return '<td class="td-' + c.key + '" data-label="' + esc(c.label) + '"' + (t ? '' : ' data-empty') + '>' + inner + '</td>';
+      }).join('') + '</tr>').join('');
+    tbody.querySelectorAll('.data-row').forEach(tr => tr.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
+      STATE.modal.lastFocus = tr.querySelector('.row-link');
+      location.hash = tr.dataset.slug;
+    }));
+    tbody.querySelectorAll('.row-link').forEach(a => a.addEventListener('click', () => { STATE.modal.lastFocus = a; }));
   }
 
   function renderPagination() {
-    const total = STATE.filtered.length;
-    const size = STATE.page.size;
-    const pages = Math.max(1, Math.ceil(total / size));
+    const total = STATE.filtered.length, pages = Math.max(1, Math.ceil(total / STATE.page.size));
     if (STATE.page.index > pages) STATE.page.index = pages;
-    setText('page-info', 'Page ' + STATE.page.index + ' of ' + pages
-      + ' · ' + total.toLocaleString() + ' record' + (total === 1 ? '' : 's'));
+    setText('page-info', 'Page ' + n(STATE.page.index) + ' of ' + n(pages));
     $('btn-prev').disabled = STATE.page.index <= 1;
     $('btn-next').disabled = STATE.page.index >= pages;
   }
-
-  function goToPage(n) {
+  function goToPage(p) {
     const pages = Math.max(1, Math.ceil(STATE.filtered.length / STATE.page.size));
-    STATE.page.index = Math.min(Math.max(1, n), pages);
-    renderTable();
-    renderPagination();
+    STATE.page.index = Math.min(Math.max(1, p), pages);
+    renderTable(); renderPagination();
+    $('result-count').scrollIntoView({ block: 'nearest' });
   }
 
   /* ------------------------------------------------------------------ *
-   * Modal: open/close + tabs + focus trap                              *
+   * Routing (permalinks)                                               *
    * ------------------------------------------------------------------ */
 
-  function openVarietyModal(id) {
-    const rec = STATE.all.find(r => r.variety_id === id);
+  function route() {
+    if (!STATE.all.length) return;
+    const h = hashValue();
+    if (!h) { if (STATE.modal.open) closeModal(true); return; }
+    if (h === 'all') { if (STATE.modal.open) closeModal(true); if (activeFilterCount()) resetFilters(); return; }
+    if (h === 'about') { openAbout(); return; }
+    if (h === 'coverage' && STATE.coverage) { openCoverage(); return; }
+    const parts = h.split('/');
+    const rec = STATE.bySlug.get(parts[0]);
     if (!rec) return;
+    const tab = TABS.some(t => t.id === parts[1]) ? parts[1] : 'record';
+    openRecord(rec, tab);
+  }
+
+  function setHash(h) {
+    const url = location.pathname + location.search + (h ? '#' + h : '');
+    history.replaceState(null, '', url);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Record view                                                        *
+   * ------------------------------------------------------------------ */
+
+  function openRecord(rec, tab) {
+    const wasOpen = STATE.modal.open && STATE.modal.record === rec;
     STATE.modal.mode = 'variety';
     STATE.modal.record = rec;
-    STATE.modal.tab = rec._has_seednet ? 'seednet' : 'research';
-    STATE.modal.lastFocus = document.activeElement;
+    STATE.modal.tab = tab;
+    if (!STATE.modal.open && !STATE.modal.lastFocus) STATE.modal.lastFocus = document.activeElement;
     STATE.modal.open = true;
-
-    setText('modal-title', rec.variety_name || '(unnamed variety)');
-    renderModalMeta(rec);
-    renderModalTabs(rec);
-    renderModalBody();
-
-    showModal();
-    const panel = document.querySelector('#detail-modal .modal__panel');
-    if (panel) panel.scrollTop = 0;
+    rec.view = rec.view || buildView(rec);
+    setText('modal-title', rec.name);
+    $('modal-sub').textContent = rec.view.subtitle;
+    $('modal-sub').hidden = !rec.view.subtitle;
+    renderTabs();
+    renderPanel();
+    showModal(!wasOpen);
   }
 
-  function openAboutModal() {
-    STATE.modal.mode = 'about';
-    STATE.modal.lastFocus = document.activeElement;
-    STATE.modal.open = true;
-
-    const s = datasetStats();
-    const n = v => Number(v).toLocaleString();
-    const lv = s.levels;
-    const grading = s.checked
-      ? '<p>Current counts among the ' + n(s.researched) + ' researched varieties: ' + n(lv['Confirmed by 2+ sources']) + ' varieties confirmed by 2+ sources, ' + n(lv['Single source']) + ' single source, ' + n(lv['Claimed, not confirmed']) + ' claimed but not confirmed, ' + n(lv['No stress tolerance claimed']) + ' with no stress tolerance claimed' + (lv['Not checked'] ? ', ' + n(lv['Not checked']) + ' not yet checked' : '') + '.</p>'
-      : '<p>The second pass has not been run on this build, so the stress types shown come from the research level alone (' + n(s.stressReported) + ' researched varieties report at least one).</p>';
-
-    setText('modal-title', 'About the data');
-    $('modal-meta').innerHTML = '';
-    $('modal-tabs').innerHTML = '';
-    $('modal-body').innerHTML =
-      '<div class="about">'
-      + '<h3 class="about__h">What this is</h3>'
-      + '<p>A seed variety dashboard of ' + n(s.total) + ' crop varieties considered by the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC)' + (s.yMin ? ', ' + s.yMin + '–' + s.yMax : '') + ', across ' + n(s.crops) + ' crops and ' + n(s.states) + ' states and union territories. It is not a list of stress-tolerant varieties: stress tolerance is one attribute, shown only where there is evidence for it. Each row is one variety, with its official record, its Seednet record where one exists, research evidence where research has been run, publications that mention it, and contact details of the developing institution. Maintained by Precision Development (PxD).</p>'
-      + '<h3 class="about__h">Where the data comes from</h3>'
-      + '<ul class="about__list">'
-      + '<li>CSC meeting minutes (PDFs): variety, crop, meeting, approval status and developing institution, and where the minutes state them, parentage, breeding method and special traits. Every record names its source document.</li>'
-      + '<li>Seednet (seednet.gov.in), the Government of India seed portal: notification number and date, parentage, recommended ecology, yield and other official fields, for the ' + n(s.seednet) + ' varieties linked to a Seednet record.</li>'
-      + '<li>Google Scholar results, archived in 2025 via SerpAPI, and OpenAlex works that mention the variety name. These are mentions, not necessarily studies of the variety.</li>'
-      + '<li>Institution websites, for the contact details of the developing institution.</li>'
-      + '<li>Language-model web research with cited sources, for ' + n(s.researched) + ' varieties in two waves (Aug 2025: ' + n(s.waveAug) + '; Oct–Nov 2026: ' + n(s.waveOct) + '), covering stress tolerance, agronomy, genetics and breeding, and seed availability.</li>'
-      + '</ul>'
-      + '<h3 class="about__h">How the Seednet link is decided</h3>'
-      + '<p>A variety is linked to a Seednet record only when the crop is the same and the name is the same, including the variety number; small spelling differences are accepted (' + n(s.seednetSpelling) + ' links). A fuzzy name match used in 2025 had linked some varieties to the Seednet record of a different variety; it was replaced in Nov 2026. Where the nearest Seednet entry is a different variety (' + n(s.differentVariety) + ' records), the record says so in a note and that entry is not used.</p>'
-      + '<h3 class="about__h">How stress tolerance is graded</h3>'
-      + '<p>First, the research summary gives a level for drought, heat, salinity, flood and submergence from its cited sources. Second, a separate pass counts the independent sources that name the exact variety and support each claim:</p>'
-      + '<ul class="about__list">'
-      + '<li>Confirmed by 2+ sources: two or more independent sources naming the variety support it.</li>'
-      + '<li>Single source: one such source.</li>'
-      + '<li>Claimed, not confirmed: the research claimed tolerance, but no source naming the variety supports it.</li>'
-      + '</ul>'
-      + grading
-      + (s.officialGraded ? '<p>' + n(s.officialGraded) + ' varieties without web research also have a level, graded from the official Seednet text alone.</p>' : '')
-      + '<p>No stress tolerance claimed means none was found, not that the variety is susceptible.</p>'
-      + '<h3 class="about__h">Limitations</h3>'
-      + '<ul class="about__list">'
-      + '<li>Research summaries are written by a language model: they are leads to verify against the linked sources, not official data.</li>'
-      + '<li>' + n(s.notResearched) + ' varieties have official data only so far; web research has not been run for them.</li>'
-      + '<li>The OpenAlex lookup is incomplete.</li>'
-      + '<li>Contact details are for the institution, not the individual breeder, and may be out of date.</li>'
-      + '<li>Seasons are not populated.</li>'
-      + '</ul>'
-      + '<h3 class="about__h">Data and code</h3>'
-      + '<p>The dataset, the pipeline and the documentation are in the repository linked as Source in the header.' + (STATE.meta.built ? ' Data build: ' + esc(String(STATE.meta.built)) + '.' : '') + '</p>'
-      + '</div>';
-
-    showModal();
-  }
-
-  function renderModalMeta(rec) {
-    const chips = [];
-    if (rec.crop) chips.push('<span class="chip">' + esc(rec.crop) + '</span>');
-    if (rec.year_of_release) chips.push('<span class="chip">Year ' + esc(rec.year_of_release) + '</span>');
-    if (!rec._researched) chips.push('<span class="chip">Official data only</span>');
-    if (rec._stress_graded) {
-      const yes = rec.stress_confirmation_level === 'Confirmed by 2+ sources' || rec.stress_confirmation_level === 'Single source';
-      chips.push('<span class="chip' + (yes ? ' chip--stress-yes' : '') + '">Stress evidence: ' + esc(rec.stress_confirmation_level) + '</span>');
-    } else if (rec._researched && rec.stress_types_strict.length) {
-      chips.push('<span class="chip chip--stress-yes">Stress tolerance reported in research</span>');
-    }
-    if (rec.evidence_quality) {
-      chips.push('<span class="chip chip--ev-' + esc(rec.evidence_quality.toLowerCase())
-        + '">Evidence: ' + esc(rec.evidence_quality) + '</span>');
-    }
-    chips.push('<span class="chip">Seednet: ' + (rec._has_seednet ? 'linked' : 'not linked') + '</span>');
-    $('modal-meta').innerHTML = chips.join(' ');
-  }
-
-  function renderModalTabs(rec) {
-    const tabs = [];
-    if (rec._has_seednet) {
-      tabs.push({ id: 'seednet', label: 'Seednet record', badge: 'Govt of India portal' });
-    }
-    const pm = (((rec.research_data || {}).full_analysis_result || {}).processing_metadata) || {};
-    const provenance = [pm.model || (rec.enrichment_wave && rec.enrichment_wave.indexOf('Gemini') !== -1 ? 'gemini-2.5-flash' : ''), pm.analysis_date ? String(pm.analysis_date).slice(0, 10) : '', (rec.search_metadata && rec.search_metadata.total_queries) ? rec.search_metadata.total_queries + ' searches' : ''].filter(Boolean).join(' · ');
-    tabs.push({ id: 'research', label: 'Record and evidence', badge: rec._researched ? 'official record and research' : 'official record' });
-
-    const tabBar = $('modal-tabs');
-    tabBar.innerHTML = tabs.map(t =>
-      '<button type="button" class="tab tab--' + esc(t.id)
-      + (STATE.modal.tab === t.id ? ' is-active' : '')
-      + '" role="tab" aria-selected="' + (STATE.modal.tab === t.id ? 'true' : 'false')
-      + '" data-tab="' + esc(t.id) + '">'
-      + '<span>' + esc(t.label) + '</span>'
-      + '<span class="tab__badge">' + esc(t.badge) + '</span>'
-      + '</button>'
-    ).join('');
-    tabBar.querySelectorAll('.tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        STATE.modal.tab = btn.dataset.tab;
-        const panel = document.querySelector('#detail-modal .modal__panel');
-        if (panel) panel.scrollTop = 0;
-        renderModalTabs(rec);
-        renderModalBody();
+  function renderTabs() {
+    const bar = $('modal-tabs');
+    bar.hidden = false;
+    bar.innerHTML = TABS.map(t => {
+      const sel = STATE.modal.tab === t.id;
+      return '<button type="button" role="tab" class="tab" id="tab-' + t.id + '" aria-controls="modal-body" aria-selected="' + sel + '" tabindex="' + (sel ? '0' : '-1') + '" data-tab="' + t.id + '">' + esc(t.label) + '</button>';
+    }).join('');
+    bar.querySelectorAll('.tab').forEach(b => {
+      b.addEventListener('click', () => selectTab(b.dataset.tab, false));
+      b.addEventListener('keydown', (e) => {
+        const ids = TABS.map(t => t.id); let i = ids.indexOf(b.dataset.tab);
+        if (e.key === 'ArrowRight') i = (i + 1) % ids.length;
+        else if (e.key === 'ArrowLeft') i = (i - 1 + ids.length) % ids.length;
+        else if (e.key === 'Home') i = 0;
+        else if (e.key === 'End') i = ids.length - 1;
+        else return;
+        e.preventDefault(); selectTab(ids[i], true);
       });
     });
   }
 
-  function renderModalBody() {
+  function selectTab(id, focus) {
+    STATE.modal.tab = id;
+    setHash(STATE.modal.record.slug + (id === 'record' ? '' : '/' + id));
+    renderTabs(); renderPanel();
+    $('modal-panel').scrollTop = 0;
+    if (focus) $('tab-' + id).focus();
+  }
+
+  function renderPanel() {
     const rec = STATE.modal.record;
     const body = $('modal-body');
-    if (!rec) { body.innerHTML = ''; return; }
-    body.innerHTML = STATE.modal.tab === 'seednet'
-      ? renderSeednetTab(rec)
-      : renderResearchTab(rec);
-
-    // Wire any post-render handlers (e.g., copy buttons inside the tab).
-    body.querySelectorAll('[data-copy]').forEach(btn => {
-      btn.addEventListener('click', () => copyToClipboard(btn.dataset.copy, btn));
-    });
+    body.setAttribute('role', 'tabpanel');
+    body.setAttribute('aria-labelledby', 'tab-' + STATE.modal.tab);
+    body.innerHTML = rec.view[STATE.modal.tab];
   }
 
-  function renderSeednetTab(rec) {
-    const sf = rec.seednet_fields || {};
-    const sfUsableKeys = Object.keys(sf).filter(k => !SEEDNET_SKIP_KEYS.has(k));
-    // Build the ordered list: curated keys first, then any extras present
-    // in the data but not in the curated order.
-    const orderedKeys = SEEDNET_FIELD_ORDER
-      .filter(k => Object.prototype.hasOwnProperty.call(sf, k));
-    const extraKeys = Object.keys(sf)
-      .filter(k => !SEEDNET_FIELD_ORDER.includes(k) && !SEEDNET_SKIP_KEYS.has(k))
-      .sort((a, b) => a.localeCompare(b));
-    const allKeys = orderedKeys.concat(extraKeys);
+  // Definition-list helpers. Rows with blank values are omitted.
+  function row(label, value) {
+    const t = clean(value);
+    return t ? '<div class="field"><dt>' + esc(label) + '</dt><dd>' + esc(t) + '</dd></div>' : '';
+  }
+  function rowHtml(label, html) {
+    return html && String(html).trim() ? '<div class="field"><dt>' + esc(label) + '</dt><dd>' + html + '</dd></div>' : '';
+  }
+  function dl(rows) { return rows ? '<dl class="fields">' + rows + '</dl>' : ''; }
+  function section(title, inner, lead) {
+    if (!inner) return '';
+    return '<section class="rsec"><h3>' + esc(title) + '</h3>' + (lead ? '<p class="lead">' + lead + '</p>' : '') + inner + '</section>';
+  }
+  function p(text, cls) { return text ? '<p' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(text) + '</p>' : ''; }
 
-    const rows = allKeys.map(k => {
-      const raw = sf[k];
-      const v = (raw == null || raw === '') ? 'Not specified' : String(raw);
-      const muted = /not specified|^none$/i.test(v) ? ' field-row__value--muted' : '';
-      return '<div class="field-row">'
-        + '<dt class="field-row__label">' + esc(k) + '</dt>'
-        + '<dd class="field-row__value' + muted + '">' + esc(v) + '</dd>'
-        + '</div>';
-    }).join('');
-
-    const portalUrl = rec.seednet_url
-      || (rec.seednet_variety_id
-          ? 'https://seednet.gov.in/SeedVarieties/ssrsVarietydetail.aspx?varietycd='
-              + encodeURIComponent(rec.seednet_variety_id)
-          : '');
-
-    const emptySeednet = sfUsableKeys.length === 0;
-    const fallbackFields = emptySeednet
-      ? (
-        '<dl class="field-grid">'
-          + '<div class="field-row">'
-          +   '<dt class="field-row__label">Seednet Match</dt>'
-          +   '<dd class="field-row__value">' + esc(rec.seednet_match || 'Not specified') + '</dd>'
-          + '</div>'
-          + '<div class="field-row">'
-          +   '<dt class="field-row__label">Seednet Variety ID</dt>'
-          +   '<dd class="field-row__value">' + esc(rec.seednet_variety_id || 'Not specified') + '</dd>'
-          + '</div>'
-          + '<div class="field-row">'
-          +   '<dt class="field-row__label">Seednet URL</dt>'
-          +   '<dd class="field-row__value">' + (portalUrl
-                ? '<a href="' + esc(portalUrl) + '" target="_blank" rel="noopener">' + esc(portalUrl) + '</a>'
-                : '<span class="muted">Not specified</span>') + '</dd>'
-          + '</div>'
-        + '</dl>'
-        + '<p class="muted seednet-note">This dataset does not include the full Seednet field grid (`seednet_fields`). Showing available official identifiers only.</p>'
-      )
-      : '';
-
-    return '<section class="tab-panel tab-panel--seednet" role="tabpanel">'
-      + '<div class="tab-panel__head">'
-      +   '<span class="badge-banner badge-banner--seednet">Source: seednet.gov.in (Government of India), scraped 2025-07-26</span>'
-      +   (portalUrl
-          ? '<a class="btn btn--seednet" href="' + esc(portalUrl) + '" target="_blank" rel="noopener">'
-              + 'View on Seednet Portal ↗</a>'
-          : '')
-      + '</div>'
-      + (emptySeednet ? fallbackFields : ('<dl class="field-grid">' + rows + '</dl>'))
-      + '</section>';
+  // One numbered, deduplicated source list per record.
+  function urlKey(u) {
+    try { const x = new URL(u); return (x.hostname.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '') + x.search).toLowerCase(); }
+    catch (e) { return String(u).toLowerCase(); }
+  }
+  function sourceTitle(u) {
+    try {
+      const x = new URL(u);
+      if (/seednet\.gov\.in$/i.test(x.hostname) && /variety/i.test(x.pathname)) return { host: 'seednet.gov.in', title: 'Seednet record of this variety' };
+      const host = x.hostname.replace(/^www\./, '');
+      let last = decodeURIComponent(x.pathname.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '');
+      last = last.replace(/\.(pdf|html?|aspx?|php|jsp)$/i, '').replace(/[-_+]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const ext = (x.pathname.match(/\.(pdf)$/i) || [])[1];
+      const good = last && /[a-z]{3,}/i.test(last) && last.length >= 6 && !/^(index|default|home|en|view|details?|article|abs|full|fulltext)$/i.test(last);
+      const title = good ? capFirst(last.length > 90 ? last.slice(0, 87).replace(/\s\S*$/, '') + '...' : last) : (ext ? 'PDF document' : 'Web page');
+      return { host: host, title: title + (good && ext ? ' (PDF)' : '') };
+    } catch (e) { return { host: '', title: 'Web page' }; }
   }
 
-  function renderResearchTab(rec) {
-    const v = rec.variety_name || '';
-    const c = rec.crop || '';
-    const q = (v + (c ? ' ' + c : '')).trim();
-    const enc = encodeURIComponent;
-    const researched = rec._researched;
-    const rd = rec.research_data || {};
+  function buildSources(rec) {
+    const r = rec.raw;
+    const far = ((r.research_data || {}).full_analysis_result) || {};
+    const st = far.stress_tolerance || {};
+    const list = []; const index = new Map();
+    const add = (u) => {
+      if (typeof u !== 'string' || !/^https?:\/\//i.test(u.trim())) return 0;
+      const k = urlKey(u.trim());
+      if (index.has(k)) return index.get(k);
+      list.push(u.trim().replace(/^http:\/\//i, (m) => m)); index.set(k, list.length); return list.length;
+    };
+    if (rec.hasSeednet && rec.seednetUrl) add(rec.seednetUrl);
+    Object.keys(st).forEach(k => ((st[k] || {}).evidence_sources || []).forEach(add));
+    ['genetics_and_qtl', 'agronomic_performance', 'breeder_and_contacts'].forEach(k => ((far[k] || {}).evidence_sources || []).forEach(add));
+    (far.reference_links || []).forEach(add);
+    (r.direct_source_links || []).forEach(add);
+    const cs = r.contacts_structured || {}, ic = r.institution_contact || {};
+    (cs.contact_source_urls || []).forEach(add);
+    (ic.source_urls || []).forEach(add);
+    return { list: list, add: add, nums: (urls) => uniq((urls || []).map(add).filter(Boolean)).sort((a, b) => a - b) };
+  }
+  function sourceRef(nums) {
+    if (!nums.length) return '';
+    return (nums.length === 1 ? 'Source ' : 'Sources ') + listJoin(nums.map(String)) + ' in the list under Publications and sources.';
+  }
+
+  function buildView(rec) {
+    const r = rec.raw;
+    const rd = r.research_data || {};
     const far = (rd.full_analysis_result && typeof rd.full_analysis_result === 'object') ? rd.full_analysis_result : {};
-    // Official Seednet fields are used only when the link is confirmed.
-    const sf = rec._has_seednet ? (rec.seednet_fields || {}) : {};
-    const csc = rec.csc_fields || {};
-    const sm = rec.search_metadata || {};
-    const stressDetail = rd.stress_tolerance_detailed || {};
-    const stressFar = (far.stress_tolerance && typeof far.stress_tolerance === 'object') ? far.stress_tolerance : {};
-    const agr = rd.agronomic_details || {};
-    const com = rd.commercial_info || {};
-    const enh = (Array.isArray(rd.enhancement_features) ? rd.enhancement_features : []).concat(rec.enrichment_wave ? ['wave: ' + rec.enrichment_wave] : []);
+    const csc = r.csc_fields || {};
+    const os_ = r.official_sources || {};
+    const sf = rec.hasSeednet ? rec.seednetFields : {};
+    const src = buildSources(rec);
 
-    const queryResults = Array.isArray(sm.query_results) ? sm.query_results : [];
-    const positiveQueries = queryResults.filter(qr => (qr && Number(qr.results_count || 0) > 0));
-    const generatedQueryLinks = (Array.isArray(rec.query_links) && rec.query_links.length)
-      ? rec.query_links
-      : positiveQueries
-        .map(qr => String(qr.query || '').trim())
-        .filter(Boolean)
-        .slice(0, 50)
-        .map(q => ({
-          query: q,
-          results_count: 0,
-          scholar_url: 'https://scholar.google.com/scholar?q=' + encodeURIComponent(q),
-          google_url: 'https://www.google.com/search?q=' + encodeURIComponent(q),
-          ncbi_url: 'https://www.ncbi.nlm.nih.gov/search/all/?term=' + encodeURIComponent(q)
-        }));
+    /* ---------- Record tab ---------- */
+    const inst = firstText(csc.institution, r.developer_institution_csc, (r.contacts_structured || {}).institution);
+    const loc = firstText(csc.institution_location, r.developer_location_csc);
+    const meeting = clean(csc.meeting_number);
+    const mdate = clean(csc.approval_date).replace(/T00:00:00(\.0+)?Z?/g, '');
+    const sentences = [];
+    const notifNo = clean(sf['Notification Number'] || os_.seednet_notification_number);
+    const notifDate = clean(sf['Notification Date'] || os_.seednet_notification_date);
+    const notifText = (notifDate ? ' on ' + notifDate : '') + (notifNo ? ' (' + notifNo.replace(/\.$/, '') + ')' : '');
+    if (rec.seednetOnly) {
+      const bsi = deshout(clean(sf['Institution Responsible for developing Breeder Seed']));
+      sentences.push((rec.crop ? rec.crop + ' variety' : 'Variety') + ' notified on Seednet' + notifText + '. It does not appear in the CSC minutes held for this dataset.');
+      if (bsi) sentences.push('Seednet names ' + bsi.replace(/[.\s]+$/, '') + ' as responsible for its breeder seed.');
+    } else {
+      sentences.push(((rec.crop ? rec.crop + ' variety' : 'Variety') + (inst ? ' developed by ' + inst + (loc && inst.indexOf(loc) === -1 ? ', ' + loc : '') : '')).replace(/[.\s]+$/, '') + '.');
+      let consider = 'It was considered by the CSC' + (meeting ? ' at its ' + meeting + ' meeting' : '') + (mdate ? ' on ' + mdate : (rec.year ? ' in ' + rec.year : ''));
+      consider += rec.outcome === 'Approved' ? ' and approved.' : rec.outcome === 'Deferred' ? ' and deferred.' : rec.outcome === 'Rejected' ? ' and rejected.' : '; the outcome is not recorded in this build.';
+      sentences.push(consider);
+      if (rec.hasSeednet && (notifNo || notifDate)) sentences.push('Seednet records its notification' + notifText + '.');
+    }
+    sentences.push({ 'CSC minutes and Seednet': 'The record draws on the CSC minutes and on Seednet.', 'CSC minutes only': 'The record draws on the CSC minutes only; no matching Seednet record was linked.', 'Seednet only': '' }[rec.source]);
+    const snYear = parseInt(clean(sf['Year of Release']), 10);
+    if (!rec.seednetOnly && rec.year && Number.isFinite(snYear) && snYear > 1900 && snYear !== rec.year) {
+      sentences.push('The year in the list (' + rec.year + ') is the year the CSC considered the variety; Seednet gives ' + snYear + ' as the year of release.');
+    }
+    rec.view = {};
+    const subtitle = rec.seednetOnly
+      ? [rec.crop, rec.year ? 'released ' + rec.year : '', 'Seednet only'].filter(Boolean).join(', ')
+      : [rec.crop, rec.year ? 'considered ' + rec.year : '', rec.outcome !== 'Not stated' ? rec.outcome.toLowerCase() : ''].filter(Boolean).join(', ');
 
-    function stressEvidenceFromQueries(stressKey, aliases) {
-      const hits = positiveQueries.filter(qr => {
-        const q = String((qr && qr.query) || '').toLowerCase();
-        return aliases.some(a => q.indexOf(a) !== -1);
-      });
-      if (!hits.length) return '';
-      return hits.length + ' positive query hit' + (hits.length > 1 ? 's' : '') + ' in search metadata';
-    }
-
-    function firstNonEmpty() {
-      for (let i = 0; i < arguments.length; i++) {
-        const v = arguments[i];
-        if (!isBlankish(v) && (typeof v !== 'object')) return String(v).trim();
-      }
-      return '';
-    }
-
-    function detailRow(label, value) {
-      const has = !isBlankish(value);
-      return '<div class="field-row">'
-        + '<dt class="field-row__label">' + esc(label) + '</dt>'
-        + '<dd class="field-row__value' + (has ? '' : ' field-row__value--muted') + '">'
-        + (has ? esc(asText(value)) : 'Not specified') + '</dd>'
-        + '</div>';
-    }
-    function detailRowHtml(label, html) {
-      const has = html != null && String(html).trim() !== '';
-      return '<div class="field-row"><dt class="field-row__label">' + esc(label) + '</dt>'
-        + '<dd class="field-row__value' + (has ? '' : ' field-row__value--muted') + '">' + (has ? html : 'Not specified') + '</dd></div>';
-    }
-    // Optional rows: rendered only when there is something to show.
-    function optRow(label, value) { return isBlankish(value) ? '' : detailRow(label, value); }
-    function optRowHtml(label, html) { return (html != null && String(html).trim() !== '') ? detailRowHtml(label, html) : ''; }
-    // Researched records keep the established "Not specified" rows; official-only
-    // records show only rows that carry data, so no section is empty.
-    const row = researched ? detailRow : optRow;
-    function section(title, inner) {
-      return inner ? '<h3 class="research-card__h research-card__h--block">' + esc(title) + '</h3>' + inner : '';
-    }
-    function grid(rows) { return rows ? '<dl class="field-grid">' + rows + '</dl>' : ''; }
-    function linkList(urls) {
-      return uniq((urls || []).filter(u => typeof u === 'string' && /^https?:/i.test(u))).map(u => linkHtml(u)).join('<br>');
-    }
-    function withShowAll(items, n, label) {
-      if (!items.length) return '<p class="muted">' + esc(label) + '</p>';
-      const head = items.slice(0, n).join(''); const rest = items.slice(n).join('');
-      return head + (rest ? '<details class="more"><summary>Show all ' + items.length + '</summary>' + rest + '</details>' : '');
-    }
-
-    /* --- head: provenance banner or the official-only line --- */
-    const pm = far.processing_metadata || {};
-    const model = pm.model || (rec.enrichment_wave_raw.indexOf('20250808') !== -1 ? 'gemini-2.5-flash' : 'a language model');
-    const when = pm.analysis_date ? ' on ' + String(pm.analysis_date).slice(0, 10) : '';
-    const nq = Number(sm.total_queries) || 0;
-    const head = researched
-      ? '<div class="tab-panel__head"><span class="badge-banner badge-banner--research">Research summary written by ' + esc(model) + esc(when)
-          + (nq ? ' from ' + esc(String(nq)) + ' web searches' : '') + '; every claim links to its source below.</span></div>'
-      : '<p class="plain-line">Web research has not been run for this variety yet.</p>';
-    const caution = researched && (rec.research_refers_to === 'other_variety' || rec.research_refers_to === 'mixed')
-      ? '<p class="plain-line plain-line--caution">Part of the research text below may describe a similarly named variety; see the confirmation notes.</p>'
+    // Prominent contact lines on the record tab.
+    const contact = buildContacts(rec, src);
+    const quickContact = contact.quick
+      ? section('Contact', dl(contact.quick), 'The full contact details of the developing institution are under Contacts.')
       : '';
 
-    /* --- summary cards --- */
-    const stressList = rec._stress_types_display;
-    const keyAttrBadges = stressList.length
-      ? stressList.map(t => '<span class="badge badge--attr">' + esc(t) + '</span>').join(' ')
-      : (rec.stress_confirmation_level === 'Claimed, not confirmed' && rec.stress_types_strict.length)
-        ? '<span class="muted">Claimed in the research but not confirmed: ' + esc(rec.stress_types_strict.join(', ')) + '.</span>'
-        : '<span class="muted">No stress tolerance found in the evidence.</span>';
-    const _lv = rec.stress_levels_gemini || {};
-    const stressLevelBadges = STRESS_KEYS.map(k => '<span class="badge ' + ((_lv[k] || 'unknown') === 'unknown' ? '' : 'badge--attr') + '">' + esc(STRESS_NAME[k]) + ': ' + esc(_lv[k] || 'unknown') + '</span>').join(' ');
-    const states = (rec.states_full && rec.states_full.length)
-      ? rec.states_full.map(s => esc(s)).join(', ')
-      : (rec.states_acronyms ? esc(rec.states_acronyms) : '');
-    const card = (h, body) => '<div class="research-card"><h3 class="research-card__h">' + esc(h) + '</h3>' + body + '</div>';
-    const cards = researched
-      ? card('Stress tolerance', '<div class="badge-row">' + keyAttrBadges + '</div>')
-        + card('Stress levels (from research)', '<div class="badge-row">' + stressLevelBadges + '</div>')
-        + card('Evidence quality', rec.evidence_quality
-            ? '<span class="badge badge--ev-' + esc(rec.evidence_quality.toLowerCase()) + '">' + esc(rec.evidence_quality) + '</span>'
-            : '<span class="muted">Unrated</span>')
-        + card('Recommended states', '<p class="research-card__body">' + (states || '<span class="muted">—</span>') + '</p>')
-        + card('Season(s)', '<p class="research-card__body">' + esc(rec.seasons || '—') + '</p>')
-        + card('Days to maturity', '<p class="research-card__body">' + (rec._dtm_raw ? esc(rec._dtm_raw) : '<span class="muted">—</span>') + '</p>')
-      : (states ? card('Recommended states', '<p class="research-card__body">' + states + '</p>') : '')
-        + (rec._dtm_raw ? card('Days to maturity', '<p class="research-card__body">' + esc(rec._dtm_raw) + '</p>') : '');
-    const cardsBlock = cards ? '<div class="research-grid">' + cards + '</div>' : '';
+    const minutesPage = httpUrl(os_.csc_minutes_list_page);
+    const minutesUrl = httpUrl(os_.csc_minutes_url), archivedUrl = httpUrl(os_.csc_minutes_archived_url);
+    const docName = firstText(csc.source_document_filename, os_.csc_source_document);
+    const minutesTitle = 'Minutes of the ' + (meeting ? meeting + ' ' : '') + 'CSC meeting';
+    const archived = archivedUrl ? ', ' + linkHtml(archivedUrl, 'archived copy') : '';
+    const minutesRow = minutesUrl
+      ? rowHtml('Minutes', linkHtml(minutesUrl, minutesTitle + ' (PDF)') + archived) + row('Source document', docName)
+      : rowHtml('Minutes', esc(docName || minutesTitle) + (minutesPage ? ', listed on the ' + linkHtml(minutesPage, 'CSC minutes page') : '') + archived);
+    const cscRows = minutesRow + row('Year considered', rec.year)
+      + row('Outcome', rec.outcome === 'Not stated' ? '' : rec.outcome)
+      + CSC_FIELDS.filter(([k]) => k !== 'source_document_filename').map(([k, l]) => row(l, k === 'approval_date' ? clean(csc[k]).replace(/T00:00:00(\.0+)?Z?/g, '') : k === 'approval_status' ? capFirst(clean(csc[k])) : k === 'page_reference' ? clean(csc[k]).replace(/^page\s*/i, '') : csc[k])).join('')
+      + (clean(csc.state_zone) ? '' : row('States recommended', rec.states.join(', ')));
 
-    /* --- official sources + Seednet link status --- */
-    const os_ = rec.official_sources || {};
-    const seednetUrl = rec._has_seednet ? (os_.seednet_url || rec.seednet_url) : '';
-    const statusText = {
-      confirmed_exact: 'Linked: same crop and same name',
-      confirmed_spelling: 'Linked: same crop, same name with a small spelling difference',
-      different_variety: 'Not linked: no Seednet record with this name and crop',
-      no_seednet: 'Not linked: no Seednet record found'
-    }[rec.seednet_match_status] || (rec._has_seednet ? 'Linked' : 'Not linked');
-    const officialRows = [
-      detailRow('Seednet match', statusText + (rec._has_seednet && rec.seednet_rematched ? ' (link corrected Nov 2026)' : '')),
-      optRowHtml('Seednet (Govt of India) record', seednetUrl ? linkHtml(seednetUrl) : ''),
-      optRow('Seednet notification', rec._has_seednet ? [os_.seednet_notification_number, os_.seednet_notification_date].filter(x => !isBlankish(x)).join(' · ') : ''),
-      optRow('CSC meeting document', [os_.csc_meeting, os_.csc_source_document].filter(x => !isBlankish(x)).join(' — ')),
-      optRow('Gazette reference', os_.gazette_reference),
-      optRow('Developing institution (CSC minutes)', [rec.developer_institution_csc, rec.developer_location_csc].filter(x => !isBlankish(x)).join(', '))
-    ].join('');
-    const cand = rec.seednet_candidate;
-    const candNote = (rec.seednet_match_status === 'different_variety' && cand && !isBlankish(cand.variety_name))
-      ? '<p class="small-note">Nearest Seednet entry is a different variety: '
-        + (cand.url ? linkHtml(cand.url, asText(cand.variety_name)) : esc(asText(cand.variety_name)))
-        + (isBlankish(cand.crop) ? '' : ' (' + esc(asText(cand.crop)) + ')') + ' — not used</p>'
-      : '';
-
-    /* --- official record from the CSC minutes --- */
-    const CSC_ORDER = [
-      ['approval_status', 'Approval status'], ['meeting_number', 'Meeting'], ['approval_date', 'Meeting date'],
-      ['meeting_title', 'Minutes'], ['source_document_filename', 'Source document'], ['page_reference', 'Page'],
-      ['year', 'Year'], ['variety_code', 'Variety code'], ['institution', 'Institution'],
-      ['institution_location', 'Institution location'], ['principal_investigator', 'Principal investigator'],
-      ['state_zone', 'States or zone'], ['agro_climatic_zones', 'Agro-climatic zones'], ['maturity_group', 'Maturity group'],
-      ['yield_performance', 'Yield performance'], ['special_traits', 'Special traits'], ['parent_material', 'Parent material'],
-      ['breeding_method', 'Breeding method'], ['meetings_considered', 'Number of meetings considered'], ['additional_notes', 'Notes']
-    ];
-    const CSC_SKIP = new Set(['crop', 'variety_name', 'similarity_score', 'csc_raw_id', 'manual_review_status', 'manual_match']);
-    const cscKnown = new Set(CSC_ORDER.map(x => x[0]));
-    const cscRows = CSC_ORDER.map(([k, l]) => optRow(l, csc[k])).join('')
-      + Object.keys(csc).filter(k => !cscKnown.has(k) && !CSC_SKIP.has(k)).sort().map(k => optRow(humanKey(k), csc[k])).join('');
-
-    /* --- stress evidence --- */
-    let stressBlock = '';
-    if (researched || rec._stress_graded) {
-      const sc = rec.stress_confirmation || {};
-      const checked = rec._stress_graded;
-      const summary = checked
-        ? [detailRow('Stress evidence', rec.stress_confirmation_level),
-           optRow('Confirmed stress types', rec.stress_types_confirmed.join(', ')),
-           optRow('Supported by 2+ sources', rec.stress_types_multi_source.join(', ')),
-           optRow('Confirmation note', rec.stress_confirmation_note)].join('')
-        : '';
-      const per = STRESS_KEYS.map(k => {
-        const d = stressFar[k] || stressDetail[k] || {};
-        const conf = (sc[k] && typeof sc[k] === 'object') ? sc[k] : null;
-        const lvl = !isBlankish(d.level) ? String(d.level).trim() : 'unknown';
-        // Submergence is only in the newer schema; skip it when absent everywhere.
-        if (k === 'submergence' && !stressFar[k] && !stressDetail[k] && !conf) return '';
-        let confLine = '';
-        if (conf) {
-          const nSrc = Number(conf.independent_sources);
-          confLine = [asText(conf.label || conf.verdict),
-            Number.isFinite(nSrc) && conf.independent_sources != null ? nSrc + ' independent source' + (nSrc === 1 ? '' : 's') : '',
-            asText(conf.basis)].filter(Boolean).join(' — ');
-        }
-        if (!researched) return confLine ? detailRow(STRESS_NAME[k], confLine) : '';
-        return detailRow(STRESS_NAME[k] + ' level', lvl)
-          + detailRow(STRESS_NAME[k] + ' details', lvl === 'unknown' && isBlankish(d.details) ? '' : d.details)
-          + (confLine ? detailRow(STRESS_NAME[k] + ' confirmation', confLine) : '');
+    let seednetBlock = '';
+    if (rec.hasSeednet) {
+      const rows = SEEDNET_FIELDS.map(([k, l]) => {
+        let v = clean(sf[k]);
+        if (/^0+(\.0+)?$/.test(v)) v = '';
+        if (k === 'State Central Variety' && !/^(state|central)/i.test(v)) v = '';
+        if (k === 'Recommended States') v = splitStates(v);
+        return row(l, deshout(v));
       }).join('');
-      const dis = (stressFar.disease_resistance && stressFar.disease_resistance.summary) || (stressDetail.disease_resistance && stressDetail.disease_resistance.summary);
-      const pest = (stressFar.pest_resistance && stressFar.pest_resistance.summary) || (stressDetail.pest_resistance && stressDetail.pest_resistance.summary);
-      stressBlock = (checked ? '' : '<p class="small-note">The independent-source check has not been run for this variety yet; levels below are from the research summary.</p>')
-        + grid(summary + per + (researched ? detailRow('Disease resistance summary', dis) + detailRow('Pest resistance summary', pest) : ''));
+      const how = rec.seednetOnly ? 'Fields as published on Seednet.' : rec.seednetStatus === 'confirmed_spelling'
+        ? 'Linked because the crop and the name match, allowing a small spelling difference.'
+        : 'Linked because the crop and the name match.';
+      seednetBlock = section('Seednet record', dl(rowHtml('Seednet page', linkHtml(rec.seednetUrl, 'Open this variety on seednet.gov.in')) + rows), esc(how + (r.seednet_rematched ? ' The link was corrected in November 2026.' : '')));
+    } else {
+      const cand = (r.seednet_candidate && typeof r.seednet_candidate === 'object') ? r.seednet_candidate : null;
+      const candName = cand ? clean(cand.variety_name) : '';
+      const candDesc = candName ? candName + (clean(cand.crop) ? ' (' + deshout(clean(cand.crop)).toLowerCase() + ')' : '') : '';
+      const reason = cand ? firstText(cand.reason, cand.note, cand.match_reason, cand.review_reason) : '';
+      let t;
+      if (rec.seednetStatus === 'needs_review') {
+        t = 'A possible Seednet record' + (candDesc ? ', ' + candDesc + ',' : '') + ' was found but needs review before it can be linked, so it is not used.';
+      } else if (rec.seednetStatus === 'same_name_crop_conflict') {
+        t = 'Seednet has a record with the same name and crop' + (candDesc ? ', ' + candDesc + ',' : '') + ' but it conflicts with this variety in other respects, so it is not linked.';
+      } else {
+        t = 'No Seednet record with this name and crop was found.';
+        if (rec.seednetStatus === 'different_variety' && candDesc) t += ' The nearest Seednet entry, ' + candDesc + ', is a different variety and is not used.';
+      }
+      if (reason) t += ' ' + capFirst(reason.replace(/\.?$/, '.'));
+      seednetBlock = section('Seednet record', p(t));
     }
 
-    /* --- sources cited by the research --- */
-    const srcUrls = (function () {
-      const urls = []; const seen = {};
-      const push = u => { if (u && typeof u === 'string' && u.indexOf('http') === 0 && !seen[u]) { seen[u] = 1; urls.push(u); } };
-      Object.keys(stressFar).forEach(k => ((stressFar[k] || {}).evidence_sources || []).forEach(push));
-      ['genetics_and_qtl', 'agronomic_performance', 'breeder_and_contacts', 'commercial_availability'].forEach(k => ((far[k] || {}).evidence_sources || []).forEach(push));
-      (far.reference_links || []).forEach(push);
-      (rec.direct_source_links || []).forEach(push);
-      return urls;
-    })();
-    function srcLabel(u) { try { const x = new URL(u); const p = x.pathname.replace(/\/+$/, ''); const last = decodeURIComponent(p.split('/').filter(Boolean).pop() || '').replace(/[-_]+/g, ' ').replace(/\.(pdf|html?|aspx|php)$/i, ''); return { host: x.hostname.replace(/^www\./, ''), title: last ? last.slice(0, 80) : x.hostname }; } catch (e) { return { host: u, title: u }; } }
-    const sourceItems = srcUrls.map(u => { const l = srcLabel(u); return '<li>' + linkHtml(u, l.title) + ' <span class="muted">' + esc(l.host) + '</span></li>'; });
-    const sourcesBlock = researched ? '<ol class="src-list">' + withShowAll(sourceItems, 6, 'No source URLs in the research summary.') + '</ol>' : '';
-
-    /* --- agronomy --- */
-    const agrRows = [
-      row('Yield', firstNonEmpty(agr.yield, sf['Average Yield (Kg/Ha)'], csc.yield_performance)),
-      row('Stability', agr.stability),
-      row('Adaptation', firstNonEmpty(agr.adaptation, sf['Adaptation and recommended ecology'])),
-      row('Maturity', firstNonEmpty(agr.maturity_days, sf['Maturity (in days)'], rec.days_to_maturity, csc.maturity_group)),
-      row('Plant characteristics', firstNonEmpty(agr.plant_characteristics, sf['General Morphological Characteristics'], sf['Specific Morphological Characteristics'])),
-      row('Field trials notes', firstNonEmpty(agr.field_trials, stressEvidenceFromQueries('trial', ['trial', 'field trial'])))
-    ].join('');
-
-    /* --- genetics and breeding --- */
     const gq = (far.genetics_and_qtl && typeof far.genetics_and_qtl === 'object') ? far.genetics_and_qtl : {};
     const legacyGen = rd.genetics_and_breeding || {};
-    const GEN_STD = [['genetic_markers', 'Genetic markers'], ['qtl_information', 'QTL information'], ['molecular_mechanisms', 'Molecular mechanisms']];
-    const genStdKeys = new Set(GEN_STD.map(x => x[0]).concat(['evidence_sources']));
-    const geneticsRows = (researched ? GEN_STD.map(([k, l]) => detailRow(l, firstNonEmpty(gq[k], legacyGen[k]))).join('') : '')
-      + Object.keys(gq).filter(k => !genStdKeys.has(k)).map(k => optRow(humanKey(k), gq[k])).join('')
-      + optRow('Parentage (Seednet)', sf['Parentage'])
-      + optRow('Parent material (CSC minutes)', csc.parent_material)
-      + optRow('Breeding method (CSC minutes)', csc.breeding_method)
-      + optRowHtml('Genetics sources', linkList(gq.evidence_sources));
-
-    /* --- contacts --- */
-    const cs = rec.contacts_structured || {};
-    const ic = rec.institution_contact || {};
-    const bc = far.breeder_and_contacts || {};
-    const lines = arr => uniq((arr || []).map(x => asText(x)).filter(x => !isBlankish(x)));
-    const emails = lines([].concat(cs.emails || [], ic.emails || []));
-    const phones = lines([].concat(cs.phones || [], ic.phones || []));
-    const addresses = lines([].concat(cs.addresses || [], ic.postal_address ? [ic.postal_address] : []));
-    const breeders = lines(cs.breeder_names || (bc.breeder ? [bc.breeder] : []));
-    const mail = e => {
-      const m = e.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-      return m ? '<a href="mailto:' + esc(m[0]) + '">' + esc(e) + '</a>' : esc(e);
-    };
-    const website = firstNonEmpty(cs.website, ic.website);
-    const contactPage = firstNonEmpty(cs.contact_page, ic.contact_page);
-    let contactRows = [
-      optRow('Institution', firstNonEmpty(cs.institution, ic.institution_official_name, csc.institution, rec.developer_institution_csc)),
-      optRow('Institution type', firstNonEmpty(cs.institution_type, ic.type)),
-      optRow('Location (CSC minutes)', firstNonEmpty(cs.institution_location_csc, rec.developer_location_csc)),
-      optRow('Head or director', firstNonEmpty(cs.head_or_director, ic.head_or_director)),
-      optRow('Seed or variety enquiries', firstNonEmpty(cs.variety_or_seed_contact, ic.variety_or_seed_contact)),
-      optRow('Breeder seed institution (Seednet)', firstNonEmpty(cs.breeder_seed_institution_seednet, sf['Institution Responsible for developing Breeder Seed'])),
-      optRowHtml('Breeder or scientist', breeders.map(esc).join('<br>')),
-      optRowHtml('Email', emails.map(mail).join('<br>')),
-      optRowHtml('Phone', phones.map(esc).join('<br>')),
-      optRowHtml('Postal address', addresses.map(esc).join('<br>')),
-      optRowHtml('Website', website && /^https?:/i.test(website) ? linkHtml(website) : esc(website)),
-      optRowHtml('Contact page', contactPage && /^https?:/i.test(contactPage) ? linkHtml(contactPage) : esc(contactPage)),
-      optRowHtml('Contact sources', linkList([].concat(cs.contact_source_urls || [], ic.source_urls || []))),
-      optRow('Notes', cs.notes),
-      researched ? optRow('Contact notes (research)', bc.contacts) : '',
-      researched ? optRow('Publications noted in research', bc.publications) : '',
-      researched ? optRowHtml('Research evidence sources', linkList(bc.evidence_sources)) : ''
-    ].join('');
-    if (!contactRows) contactRows = '';
-    const contactsBlock = contactRows ? grid(contactRows) : '<p class="muted">No contact details found yet.</p>';
-
-    /* --- publications --- */
-    const authorsText = a => { const l = (Array.isArray(a) ? a : []).filter(x => !isBlankish(x)).map(String); return l.slice(0, 4).join(', ') + (l.length > 4 ? ' et al.' : ''); };
-    const pubs = Array.isArray(rec.publications_openalex) ? rec.publications_openalex.filter(w => w && typeof w === 'object') : [];
-    const pubRows = pubs.length
-      ? '<ol class="pub-list">' + withShowAll(pubs.map(w => {
-          const au = authorsText(w.authors);
-          const link = w.doi || w.landing_page;
-          return '<li>' + (au ? esc(au) + ' ' : '') + (w.year ? '(' + esc(String(w.year)) + '). ' : (au ? '. ' : ''))
-            + '<em>' + esc(w.title || 'Untitled') + '</em>' + (isBlankish(w.venue) ? '' : '. ' + esc(w.venue))
-            + (link ? '. ' + linkHtml(link, w.doi ? w.doi : 'link') : '')
-            + (Number(w.cited_by_count) ? ' <span class="muted">(cited by ' + esc(String(w.cited_by_count)) + ')</span>' : '')
-            + ' <span class="muted">[mentioned in ' + esc(w.matched_on || 'abstract') + ']</span></li>';
-        }), 5, '') + '</ol>'
-        + (rec.publications_openalex_count > pubs.length ? '<p class="muted">' + esc(String(rec.publications_openalex_count - pubs.length)) + ' more in the data file.</p>' : '')
-      : '<p class="muted">No OpenAlex publication mentions found for this variety name.</p>';
-    const spubs = Array.isArray(rec.publications_scholar) ? rec.publications_scholar.filter(w => w && typeof w === 'object') : [];
-    const spubRows = spubs.length
-      ? '<ol class="pub-list">' + withShowAll(spubs.map(w =>
-          '<li>' + (isBlankish(w.publication_info) ? '' : esc(w.publication_info) + '. ') + '<em>' + esc(w.title || 'Untitled') + '</em>'
-          + (w.link ? ' ' + linkHtml(w.link, 'link') : '')
-          + (Number(w.cited_by) ? ' <span class="muted">(cited by ' + esc(String(w.cited_by)) + ')</span>' : '')
-          + ' <span class="muted">[name in ' + esc(w.matched_on || 'snippet') + ']</span></li>'), 5, '') + '</ol>'
-        + (rec.publications_scholar_count > spubs.length ? '<p class="muted">' + esc(String(rec.publications_scholar_count - spubs.length)) + ' more in the data file.</p>' : '')
-      : '<p class="muted">No Google Scholar hits mentioning this variety name in the 2025 search results.</p>';
-
-    /* --- research-only extras --- */
-    const commercialRows = researched ? [
-      detailRow('Seed corporations', com.seed_corporations),
-      detailRow('Availability status', com.availability_status),
-      detailRow('KVK', com.kvk),
-      detailRow('Private dealers', com.private_dealers)
-    ].join('') : '';
-    const enhBlock = researched
-      ? '<div class="badge-row">' + (enh.length ? enh.map(item => '<span class="badge badge--attr">' + esc(item) + '</span>').join(' ') : '<span class="muted">No enhancement metadata available.</span>') + '</div>'
+    const genOfficial = row('Parentage (Seednet)', deshout(clean(sf['Parentage'])))
+      + row('Parent material (CSC minutes)', csc.parent_material)
+      + row('Breeding method (CSC minutes)', /^variety$/i.test(clean(csc.breeding_method)) ? '' : csc.breeding_method);
+    const GEN = [['genetic_markers', 'Genetic markers'], ['qtl_information', 'QTL information'], ['molecular_mechanisms', 'Molecular mechanisms'],
+      ['genes_introgressed', 'Genes introgressed'], ['parentage_and_pedigree', 'Parentage and pedigree'], ['breeding_method', 'Breeding method'],
+      ['breeding_line_designations', 'Breeding line designations'], ['genome_resources', 'Genome resources']];
+    const genKnown = new Set(GEN.map(x => x[0]).concat(['evidence_sources']));
+    const genResearch = rec.researched
+      ? GEN.map(([k, l]) => row(l, firstResearch(gq[k], legacyGen[k]))).join('')
+        + Object.keys(gq).filter(k => !genKnown.has(k)).map(k => row(humanKey(k), rclean(gq[k]))).join('')
       : '';
-    const directLinks = (rec.direct_source_links && rec.direct_source_links.length)
-      ? '<div class="query-links">' + rec.direct_source_links.map(link =>
-          '<div class="query-link-row"><p class="query-link-row__query">' + linkHtml(link) + '</p></div>').join('') + '</div>'
-      : (researched ? '<p class="muted">No direct source URLs available in this record.</p>' : '');
-    const quick = q
-      ? '<div class="quick-links">'
-        + '<a class="btn btn--secondary" target="_blank" rel="noopener" href="https://scholar.google.com/scholar?q=' + enc(q + ' stress tolerance') + '">Google Scholar</a>'
-        + '<a class="btn btn--secondary" target="_blank" rel="noopener" href="https://www.ncbi.nlm.nih.gov/search/all/?term=' + enc(q) + '">NCBI</a>'
-        + '</div>'
-      : '';
-    const replay = (researched && (!rec.direct_source_links || !rec.direct_source_links.length))
-      ? (generatedQueryLinks.length
-          ? '<div class="query-links">' + generatedQueryLinks.map(item =>
-              '<div class="query-link-row">'
-                + '<p class="query-link-row__query">' + esc(item.query || item.q || '') + '</p>'
-                + (item.results_count != null ? '<p class="muted">Results: ' + esc(String(item.results_count)) + '</p>' : '')
-                + '<div class="query-link-row__actions">'
-                  + '<a class="btn btn--secondary" target="_blank" rel="noopener" href="' + esc(item.scholar_url || item.scholar || '') + '">Scholar</a>'
-                  + '<a class="btn btn--secondary" target="_blank" rel="noopener" href="' + esc(item.google_url || item.google || '') + '">Google</a>'
-                  + '<a class="btn btn--secondary" target="_blank" rel="noopener" href="' + esc(item.ncbi_url || item.ncbi || '') + '">NCBI</a>'
-                + '</div>'
-              + '</div>').join('') + '</div>'
-          : '<p class="muted">No query-level links available in this record.</p>')
-      : '';
+    const genNums = src.nums(gq.evidence_sources);
+    const genetics = (genOfficial ? '<h4>From the official record</h4>' + dl(genOfficial) : '')
+      + (genResearch ? '<h4>From the research summary</h4>' + dl(genResearch) + p(sourceRef(genNums), 'note') : '');
 
-    return '<section class="tab-panel tab-panel--research" role="tabpanel">'
-      + head + caution
-      + cardsBlock
-      + section('Official sources', grid(officialRows) + candNote)
-      + section('Official record (CSC minutes)', grid(cscRows))
-      + section('Stress tolerance evidence', stressBlock)
-      + (researched ? section('Sources cited by the research (' + srcUrls.length + ')', sourcesBlock) : '')
-      + section('Agronomic details', grid(agrRows))
-      + section('Genetics and breeding', grid(geneticsRows))
-      + section('Contacts', contactsBlock)
-      + section('Publications (Google Scholar via SerpAPI, 2025; mentions of the variety name)', spubRows)
-      + section('Publications (OpenAlex, mentions of the variety name)', pubRows)
-      + section('Commercial information', grid(commercialRows))
-      + section('Enhancement features', enhBlock)
-      + section('Direct pulled source links', directLinks)
-      + section('Quick research links', quick)
-      + section('Search query replay links (secondary)', replay)
-      + '</section>';
+    const printed = clean(r.variety_name_as_printed);
+    if (printed && printed !== rec.name) sentences.push('Printed in the source as ' + printed + '.');
+    const related = (Array.isArray(r.related_record_ids) ? r.related_record_ids : []).map(id => STATE.bySlug.get(String(id))).filter(x => x && x !== rec);
+    const relatedBlock = related.length ? section('Related records', '<ul class="related">' + related.map(x =>
+      '<li><a href="#' + esc(x.slug) + '">' + esc(x.name) + '</a>' + esc([x.crop ? ', ' + x.crop.toLowerCase() : '', x.year ? ', ' + (x.seednetOnly ? 'released ' : 'considered ') + x.year : '', x.seednetOnly ? ', Seednet only' : (x.outcome !== 'Not stated' ? ', ' + x.outcome.toLowerCase() : '')].join('')) + '</li>').join('') + '</ul>',
+      'Other records in the dataset for what appears to be the same variety, for example the same variety considered at another meeting.') : '';
+    const nq = String(r.name_quality || 'ok').toLowerCase();
+    if (nq && nq !== 'ok') sentences.push('The name in the minutes is incomplete or generic; it could not be linked to other sources.');
+    rec.view.subtitle = subtitle;
+    rec.view.record = '<div class="summary">' + sentences.filter(Boolean).map(s => '<p>' + esc(s) + '</p>').join('') + '</div>'
+      + '<p class="permalink">Permanent link to this record: <a href="#' + esc(rec.slug) + '">#' + esc(rec.slug) + '</a></p>'
+      + relatedBlock
+      + quickContact
+      + (rec.seednetOnly ? '' : section('Official record (CSC minutes)', dl(cscRows)))
+      + seednetBlock
+      + section('Genetics and breeding', genetics, rec.researched ? 'Fields the sources do not state are left out. Text from the research summary was written by a language model and should be checked against the cited sources.' : 'Fields the sources do not state are left out.');
+
+    /* ---------- Stress evidence tab ---------- */
+    rec.view.evidence = buildEvidence(rec, far, rd, sf, src);
+
+    /* ---------- Contacts tab ---------- */
+    rec.view.contacts = contact.full;
+
+    /* ---------- Publications and sources tab ---------- */
+    rec.view.sources = buildPublications(rec) + buildSourceList(rec, src) + buildAboutRecord(rec, far, r);
+    return rec.view;
   }
 
-  function showModal() {
-    const m = $('detail-modal');
-    m.hidden = false;
-    document.body.classList.add('modal-open');
-    // Focus first focusable in panel for screen-reader hand-off.
-    requestAnimationFrame(() => {
-      const focusable = m.querySelectorAll(focusableSelector());
-      if (focusable.length) focusable[0].focus();
+  function buildEvidence(rec, far, rd, sf, src) {
+    const r = rec.raw;
+    const stFar = (far.stress_tolerance && typeof far.stress_tolerance === 'object') ? far.stress_tolerance : {};
+    const stOld = rd.stress_tolerance_detailed || {};
+    const sc = r.stress_confirmation || {};
+    const levels = r.stress_levels_gemini || {};
+    let lead;
+    if (rec.evidence === 'Two or more sources' || rec.evidence === 'One source') {
+      lead = 'The independent-source check supports ' + rec.stressText.replace(/^./, c => c.toLowerCase()) + '.';
+    } else if (rec.evidence === 'Claimed, not confirmed') {
+      lead = 'The research summary claims tolerance of ' + listJoin(rec.typesClaimed.map(t => t.toLowerCase())) + ', but no independent source naming this variety supports the claim.';
+    } else if (rec.evidence === 'None found') {
+      lead = rec.researched
+        ? 'Neither the research summary nor the official record reports tolerance of drought, heat, salinity, flood or submergence for this variety. This means none was found, not that the variety is susceptible.'
+        : 'The official record reports no tolerance of drought, heat, salinity, flood or submergence for this variety. This means none was found, not that the variety is susceptible.';
+    } else {
+      lead = 'This variety has not been researched on the web, and its official record has not been graded for stress tolerance.';
+    }
+    const basisRaw = clean(r.stress_basis).toLowerCase();
+    const basisText = { 'research and official text': 'The grade draws on the research summary and on the official Seednet text.', 'official text only': 'The grade rests on the official Seednet text alone, because web research has not been run for this variety.' }[basisRaw]
+      || (!basisRaw && !rec.researched && rec.graded ? 'The grade rests on the official Seednet text alone, because web research has not been run for this variety.' : '');
+    let out = '<div class="summary"><p>' + esc(lead) + '</p>'
+      + (basisText ? '<p>' + esc(basisText) + '</p>' : '') + '</div>';
+    const adjusted = STRESS_KEYS.map(k => {
+      const c = sc[k];
+      const why = c && typeof c === 'object' ? clean(c.verdict_adjusted_reason) : '';
+      return why ? 'For ' + STRESS_NAME[k].toLowerCase() + ', ' + why.charAt(0).toLowerCase() + why.slice(1).replace(/\.?$/, '.') : '';
+    }).filter(Boolean);
+    const note = [clean(r.stress_confirmation_note)].concat(adjusted).filter(Boolean).join(' ');
+    if (note) out += '<p class="caveat"><strong>Reviewer\'s caveat.</strong> ' + esc(note) + '</p>';
+    if (rec.researched && (r.research_refers_to === 'other_variety' || r.research_refers_to === 'mixed')) {
+      out += '<p class="caveat">Part of the research text may describe a similarly named variety.</p>';
+    }
+
+    const VERDICT = {
+      confirmed_multi_source: 'Supported by two or more independent sources naming the variety',
+      single_source: 'Supported by one independent source naming the variety',
+      weak_or_generic: 'Not confirmed; the sources are generic or do not name the variety clearly',
+      not_supported: 'Not confirmed; no source supports the claim',
+      other_variety: 'Not confirmed; the sources describe a different variety'
+    };
+    const blocks = []; const none = [];
+    STRESS_KEYS.forEach(k => {
+      const d = stFar[k] || stOld[k] || {};
+      const conf = (sc[k] && typeof sc[k] === 'object') ? sc[k] : null;
+      const lvl = clean(d.level) || clean(levels[k]);
+      const details = rclean(d.details);
+      const verdict = conf && VERDICT[conf.verdict] ? VERDICT[conf.verdict] : '';
+      const nSrc = conf && Number.isFinite(Number(conf.independent_sources)) && Number(conf.independent_sources) > 0 ? Number(conf.independent_sources) : 0;
+      const nums = src.nums(d.evidence_sources);
+      const ot = (r.stress_official_text && typeof r.stress_official_text === 'object') ? r.stress_official_text[k] : null;
+      const otQuote = ot && typeof ot === 'object' ? clean(ot.quote) : '';
+      const otField = ot && typeof ot === 'object' ? clean(ot.field).replace(/^Seednet:\s*/i, '') : '';
+      if (!lvl && !details && !verdict && !otQuote) { none.push(STRESS_NAME[k].toLowerCase()); return; }
+      const rows = rowHtml('Official text', otQuote ? '\u201c' + esc(deshout(otQuote)) + '\u201d' + (otField ? ' <span class="note">(Seednet, ' + esc(otField.toLowerCase()) + ')</span>' : '') : '')
+        + row('Level in the research summary', lvl ? capFirst(lvl) : '')
+        + row('Independent-source check', verdict ? verdict + (nSrc > 1 ? ' (' + nSrc + ' counted)' : '') + '.' : '')
+        + row('How it was checked', conf ? rclean(conf.basis) : '')
+        + row('What the research says', details)
+        + row('Cited sources', nums.length ? listJoin(nums.map(String)) + ' (see Publications and sources)' : '');
+      if (rows) blocks.push('<h4>' + esc(STRESS_NAME[k]) + '</h4>' + dl(rows)); else none.push(STRESS_NAME[k].toLowerCase());
+    });
+    if (blocks.length) {
+      out += section('Tolerance by stress', blocks.join('') + (none.length && rec.researched ? p('The research found nothing on ' + listJoin(none) + '.', 'note') : ''),
+        rec.researched ? 'The level comes from the research summary, written by a language model. The check counts the independent sources that name this exact variety.' : '');
+    } else if (rec.researched) {
+      out += p('The research found nothing on drought, heat, salinity, flood or submergence for this variety.', 'note');
+    }
+    const official = row('Reaction to stress (Seednet)', deshout(clean(sf['Reaction to Stress'])))
+      + row('Reaction to major diseases (Seednet)', deshout(clean(sf['Reaction to Major Diseases'])))
+      + row('Reaction to major pests (Seednet)', deshout(clean(sf['Reaction to Major Pests'])))
+      + row('Special traits (CSC minutes)', (r.csc_fields || {}).special_traits);
+    out += section('Official statements', dl(official));
+    const dis = rclean((stFar.disease_resistance || {}).summary) || rclean((stOld.disease_resistance || {}).summary);
+    const pest = rclean((stFar.pest_resistance || {}).summary) || rclean((stOld.pest_resistance || {}).summary);
+    out += section('Disease and pest resistance (research summary)', dl(row('Disease resistance', dis) + row('Pest resistance', pest)));
+
+    if (rec.researched) {
+      const ap = (far.agronomic_performance && typeof far.agronomic_performance === 'object') ? far.agronomic_performance : {};
+      const ad = rd.agronomic_details || {};
+      const agr = row('Yield', firstResearch(ap.yield, ad.yield, ap.yield_potential))
+        + row('Yield stability', firstResearch(ap.stability, ad.stability, ap.yield_stability))
+        + row('Adaptation', firstResearch(ap.adaptation, ad.adaptation))
+        + row('Maturity (days)', firstResearch(ap.maturity_days, ad.maturity_days))
+        + row('Plant characteristics', firstResearch(ap.plant_characteristics, ad.plant_characteristics))
+        + row('Field trials', firstResearch(ap.field_trials, ad.field_trials, ap.field_trial_results))
+        + row('Farmer adoption', rclean(ap.farmer_adoption));
+      const nums = src.nums(ap.evidence_sources);
+      out += section('Agronomy (research summary)', dl(agr) + p(sourceRef(nums), 'note'),
+        'These figures come from the research summary, written by a language model, and have not been checked against the sources. Official figures, where Seednet gives them, are in the Record tab.');
+    }
+    return out;
+  }
+
+  // Every contact field the record carries, deduplicated. Used for the Contacts tab,
+  // the "Contact details available" filter and the counts, so all three agree.
+  function contactData(r, rec) {
+    const cs = (r.contacts_structured && typeof r.contacts_structured === 'object') ? r.contacts_structured : {};
+    const ic = (r.institution_contact && typeof r.institution_contact === 'object') ? r.institution_contact : {};
+    const far = ((r.research_data || {}).full_analysis_result) || {};
+    const bc = far.breeder_and_contacts || {};
+    const csc = r.csc_fields || {};
+    const items = (arr) => {
+      const seen = new Set(); const out = [];
+      (arr || []).forEach(x => { const t = clean(x); const k = t.toLowerCase().replace(/\s+/g, ' '); if (t && !seen.has(k)) { seen.add(k); out.push(t); } });
+      return out;
+    };
+    const emailsRaw = items([].concat(cs.emails || [], ic.emails || []));
+    const emails = []; const seenE = new Set();
+    emailsRaw.forEach(e => (e.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).forEach(m => {
+      const k = m.toLowerCase(); if (!seenE.has(k)) { seenE.add(k); emails.push(m); }
+    }));
+    const phonesAll = items([].concat(cs.phones || [], ic.phones || []));
+    const fax = items(phonesAll.filter(x => /^\s*fax\b/i.test(x)).map(x => x.replace(/^\s*fax\s*(no\.?)?\s*[:.-]?\s*/i, '')).concat(cs.fax || [], ic.fax || []));
+    const phoneNotes = items([].concat(cs.phone_notes || [], ic.phone_notes || []));
+    const phones = phonesAll.filter(x => !/^\s*fax\b/i.test(x)).map(x => x.replace(/^\s*(phone|tel|telephone|ph|mobile)\.?\s*(no\.?)?\s*[:.-]\s*/i, ''));
+    const addresses = items([].concat(cs.addresses || [], ic.postal_address ? [ic.postal_address] : [])).map(deshout);
+    const breeders = items(cs.breeder_names || []);
+    const website = httpUrl(firstText(cs.website, ic.website));
+    const contactPage = httpUrl(firstText(cs.contact_page, ic.contact_page));
+    const head = firstText(cs.head_or_director, ic.head_or_director);
+    const seed = firstText(cs.variety_or_seed_contact, ic.variety_or_seed_contact);
+    const institution = firstText(cs.institution, ic.institution_official_name, csc.institution, r.developer_institution_csc);
+    const has = !!(emails.length || phones.length || fax.length || phoneNotes.length || breeders.length || addresses.length || head || seed || website || contactPage);
+    return { emails, phones, fax, phoneNotes, addresses, breeders, website, contactPage, head, seed, institution, has };
+  }
+
+  function buildContacts(rec, src) {
+    const r = rec.raw;
+    const cs = (r.contacts_structured && typeof r.contacts_structured === 'object') ? r.contacts_structured : {};
+    const ic = (r.institution_contact && typeof r.institution_contact === 'object') ? r.institution_contact : {};
+    const far = ((r.research_data || {}).full_analysis_result) || {};
+    const bc = far.breeder_and_contacts || {};
+    const csc = r.csc_fields || {};
+    const sf = rec.hasSeednet ? rec.seednetFields : {};
+    const cd = contactData(r, rec);
+    const { emails, phones, fax, phoneNotes, addresses, breeders, website, contactPage, head, seed, institution } = cd;
+    const lines = (arr, fn) => arr.map(x => '<span class="line">' + (fn ? fn(x) : esc(x)) + '</span>').join('');
+    const mail = (e) => '<a href="mailto:' + esc(e) + '">' + esc(e) + '</a>';
+    const tel = (t) => { const d = (t.match(/^[+\d][\d\s()-]{5,}\d/) || [''])[0].replace(/[^\d+]/g, ''); return d.length >= 6 ? '<a href="tel:' + esc(d) + '">' + esc(t) + '</a>' : esc(t); };
+
+    const rows = row('Institution', institution)
+      + row('Institution type', firstText(cs.institution_type, ic.type))
+      + row('Location (CSC minutes)', firstText(cs.institution_location_csc, r.developer_location_csc, csc.institution_location))
+      + row('Head or director', head)
+      + row('Seed or variety enquiries', seed)
+      + rowHtml('Breeder or scientist', lines(breeders))
+      + row('Principal investigator (CSC minutes)', csc.principal_investigator)
+      + rowHtml('Email', lines(emails, mail))
+      + rowHtml('Phone', lines(phones, tel))
+      + rowHtml('Phone notes', lines(phoneNotes))
+      + rowHtml('Fax', lines(fax))
+      + rowHtml('Postal address', lines(addresses))
+      + rowHtml('Website', website ? linkHtml(website, website.replace(/^https?:\/\//, '').replace(/\/$/, '')) : '')
+      + rowHtml('Contact page', contactPage ? linkHtml(contactPage, 'Contact page of the institution') : '')
+      + row('Breeder seed institution (Seednet)', deshout(firstText(cs.breeder_seed_institution_seednet, sf['Institution Responsible for developing Breeder Seed'])))
+      + row('Notes', cs.notes)
+      + (rec.researched ? row('Contact notes (research summary)', rclean(bc.contacts)) : '');
+    const nums = src.nums([].concat(cs.contact_source_urls || [], ic.source_urls || [], bc.evidence_sources || []));
+    const has = cd.has;
+    const full = has
+      ? section('Developing institution', dl(rows) + p(sourceRef(nums), 'note'),
+        'Contact details are for the developing institution, taken from its own website and directories, and may be out of date. Fields the sources do not state are left out.')
+      : section('Developing institution', dl(rows) + p('The sources searched give no contact details for this institution.', 'note'));
+    const quick = row('Institution', institution)
+      + rowHtml('Email', lines(emails.slice(0, 3), mail) + (emails.length > 3 ? '<span class="line note">and ' + (emails.length - 3) + ' more under Contacts</span>' : ''))
+      + rowHtml('Phone', lines(phones.slice(0, 3), tel) + (phones.length > 3 ? '<span class="line note">and ' + (phones.length - 3) + ' more under Contacts</span>' : ''))
+      + rowHtml('Breeder or scientist', lines(breeders.slice(0, 3)));
+    return { full: full, quick: has ? quick : '' };
+  }
+
+  function authorsText(a) {
+    const l = (Array.isArray(a) ? a : []).map(x => clean(x)).filter(Boolean);
+    if (!l.length) return '';
+    return l.length > 4 ? l.slice(0, 3).join(', ') + ' and others' : listJoin(l);
+  }
+  // Text written in a legacy Hindi font encoding is unreadable; detect and drop it.
+  function looksGarbled(s) { return /[;~\\]\s?[a-z]|\bkn~|ifj"/i.test(s) && !/\b(the|of|and|in)\b/i.test(s); }
+
+  function buildPublications(rec) {
+    const r = rec.raw;
+    const works = [];
+    const seen = new Set();
+    const key = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80);
+    (Array.isArray(r.publications_openalex) ? r.publications_openalex : []).forEach(w => {
+      if (!w || typeof w !== 'object' || isBlank(w.title)) return;
+      const k = key(w.title); if (seen.has(k)) return; seen.add(k);
+      works.push({ authors: authorsText(w.authors), year: Number(w.year) || null, title: clean(w.title), venue: clean(w.venue), url: httpUrl(w.doi || w.landing_page) });
+    });
+    (Array.isArray(r.publications_scholar) ? r.publications_scholar : []).forEach(w => {
+      if (!w || typeof w !== 'object' || isBlank(w.title)) return;
+      const k = key(w.title); if (seen.has(k)) return; seen.add(k);
+      const info = clean(w.publication_info);
+      const parts = info.split(/\s+-\s+/);
+      const ym = info.match(/\b(19|20)\d{2}\b/);
+      let venue = parts.length >= 3 ? parts[1].replace(/,?\s*(19|20)\d{2}\s*$/, '').trim() : '';
+      if (/^(19|20)\d{2}$/.test(venue) || looksGarbled(venue)) venue = '';
+      const host = parts.length >= 2 ? parts[parts.length - 1].trim() : '';
+      let authors = authorsText(w.authors);
+      if (!authors && parts.length >= 2) authors = parts[0].replace(/…$/, '').trim();
+      authors = authors.replace(/\s*…\s*$/, '');
+      works.push({ authors: authors, year: ym ? Number(ym[0]) : null, title: clean(w.title).replace(/\s+…$/, '…'), venue: venue || (host && !looksGarbled(host) ? host : ''), url: httpUrl(w.link) });
+    });
+    works.sort((a, b) => (b.year || 0) - (a.year || 0));
+    const fmt = (w) => '<li>' + (w.authors ? esc(w.authors) + ' ' : '') + (w.year ? '(' + w.year + '). ' : (w.authors ? '(no date). ' : ''))
+      + (w.url ? linkHtml(w.url, w.title) : esc(w.title)) + (/[.?!…]$/.test(w.title) ? '' : '.') + (w.venue ? ' ' + esc(w.venue.replace(/\.$/, '')) + (/…$/.test(w.venue) ? '' : '.') : '') + '</li>';
+    const total = (Number(r.publications_scholar_count) || 0) + (Number(r.publications_openalex_count) || 0);
+    const lead = 'Works whose title, abstract or search snippet contains the variety name, from Google Scholar (searched in 2025) and OpenAlex. A mention is not necessarily a study of this variety.';
+    if (!works.length) return section('Publications', p('The searches found no work that mentions this variety name.', 'note'), esc(lead));
+    const head = works.slice(0, 10).map(fmt).join('');
+    const rest = works.slice(10).map(fmt).join('');
+    let html = '<ol class="refs">' + head + '</ol>';
+    if (rest) html += '<details class="more"><summary>Show ' + (works.length - 10) + ' more works</summary><ol class="refs" start="11">' + rest + '</ol></details>';
+    if (total > works.length) html += p('The searches counted ' + n(total) + ' mentions in all; ' + n(works.length) + ' distinct works are listed here.', 'note');
+    return section('Publications (' + works.length + ')', html, esc(lead));
+  }
+
+  function buildSourceList(rec, src) {
+    if (!src.list.length) return section('Sources', p(rec.researched ? 'The research summary for this variety cites no web sources.' : 'Web research has not been run for this variety, so no web sources are listed. The official record comes from the CSC minutes named in the Record tab.', 'note'));
+    const items = src.list.map(u => { const s = sourceTitle(u); return '<li>' + linkHtml(u, s.title) + (s.host ? ', ' + esc(s.host) : '') + '.</li>'; });
+    const head = items.slice(0, 15).join(''); const rest = items.slice(15).join('');
+    let html = '<ol class="refs">' + head + '</ol>';
+    if (rest) html += '<details class="more"><summary>Show ' + (items.length - 15) + ' more sources</summary><ol class="refs" start="16">' + rest + '</ol></details>';
+    return section('Sources (' + src.list.length + ')', html, 'Every web source cited anywhere in this record, numbered once. The numbers in the other tabs refer to this list.');
+  }
+
+  function buildAboutRecord(rec, far, r) {
+    const parts = [];
+    if (rec.researched) {
+      const pm = far.processing_metadata || {};
+      const model = clean(pm.model);
+      const date = clean(pm.analysis_date) ? String(pm.analysis_date).slice(0, 10) : '';
+      const nq = Number((r.search_metadata || {}).total_queries) || 0;
+      parts.push('The research summary for this variety was written by ' + (model || 'a language model') + (date ? ' on ' + date : '')
+        + (nq ? ' from ' + nq + ' web searches' : '') + ', as part of the ' + rec.waveLabel + ' research' + (model ? '.' : '; the name of the model was not recorded.'));
+      const refers = { this_variety: 'A later check found that the research text refers to this exact variety.', unclear: 'A later check could not settle whether the research text refers to this exact variety.', mixed: 'A later check found that the research text mixes this variety with similarly named ones.', other_variety: 'A later check found that the research text appears to describe a different variety.' }[r.research_refers_to];
+      if (refers) parts.push(refers);
+    } else {
+      parts.push('Web research has not been run for this variety; everything shown comes from the official record' + (rec.hasSeednet ? ' and Seednet' : '') + '.');
+    }
+    const st = { confirmed_exact: 'matches on crop and name', confirmed_spelling: 'matches on crop and name with a small spelling difference', different_variety: 'found only a different variety, which is not used', no_seednet: 'found no Seednet record' }[rec.seednetStatus];
+    if (st) parts.push('The Seednet link ' + st + '.');
+    return section('About this record', p(parts.join(' ')));
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Coverage view                                                      *
+   * ------------------------------------------------------------------ */
+
+  function ordinal(k) {
+    const v = Number(k); if (!Number.isFinite(v)) return String(k);
+    const s10 = v % 10, s100 = v % 100;
+    return v + (s100 >= 11 && s100 <= 13 ? 'th' : s10 === 1 ? 'st' : s10 === 2 ? 'nd' : s10 === 3 ? 'rd' : 'th');
+  }
+  function minutesName(m) {
+    return 'the minutes of the ' + ordinal(m.meeting_number) + ' ' + String(m.category || '').toLowerCase() + ' meeting' + (m.year ? ' (' + m.year + ')' : '');
+  }
+  // Match each CSC record to a row of coverage.json: exact file name (ignoring case),
+  // else series, meeting number and year read from the file name.
+  function mapMinutes() {
+    STATE.minutesByKey = new Map();
+    const list = (STATE.coverage && Array.isArray(STATE.coverage.minutes)) ? STATE.coverage.minutes : [];
+    const byFile = new Map();
+    list.forEach((m, i) => {
+      m.key = String(m.category || 'x').toLowerCase().slice(0, 4) + '-' + m.meeting_number + '-' + (m.year || 'na') + (list.findIndex(o => o.category === m.category && o.meeting_number === m.meeting_number && o.year === m.year) !== i ? '-' + i : '');
+      STATE.minutesByKey.set(m.key, m);
+      if (m.local_file) byFile.set(String(m.local_file).toLowerCase(), m);
+      m.count = 0;
+    });
+    STATE.all.forEach(rec => {
+      rec.minutesKey = '';
+      if (rec.seednetOnly) return;
+      const doc = clean((rec.raw.official_sources || {}).csc_source_document) || clean((rec.raw.csc_fields || {}).source_document_filename);
+      if (!doc) return;
+      let m = byFile.get(doc.toLowerCase());
+      if (!m) {
+        const cat = /^horti/i.test(doc) ? 'Horticultural' : /^agri/i.test(doc) ? 'Agricultural' : '';
+        const year = (doc.match(/_((19|20)\d{2})_/) || [])[1] || '';
+        const nums = (doc.match(/(\d{1,3})(st|nd|rd|th)/gi) || []).map(x => parseInt(x, 10));
+        const cands = list.filter(o => (!cat || o.category === cat) && nums.indexOf(Number(o.meeting_number)) !== -1);
+        m = cands.find(o => !year || String(o.year) === year) || (cands.length === 1 ? cands[0] : null);
+      }
+      if (m) { rec.minutesKey = m.key; m.count++; }
     });
   }
 
-  function closeModal() {
-    const m = $('detail-modal');
-    m.hidden = true;
-    document.body.classList.remove('modal-open');
-    STATE.modal.open = false;
+  function openCoverage() {
+    STATE.modal.mode = 'coverage';
     STATE.modal.record = null;
-    STATE.modal.mode = 'variety';
-    if (STATE.modal.lastFocus && typeof STATE.modal.lastFocus.focus === 'function') {
-      try { STATE.modal.lastFocus.focus(); } catch (_) { /* element may have detached */ }
-    }
+    if (!STATE.modal.open) STATE.modal.lastFocus = document.activeElement;
+    STATE.modal.open = true;
+    const c = STATE.coverage || {};
+    const list = (Array.isArray(c.minutes) ? c.minutes : []).slice()
+      .sort((a, b) => String(a.category).localeCompare(String(b.category)) || Number(a.meeting_number) - Number(b.meeting_number) || String(a.year).localeCompare(String(b.year)));
+    const s = datasetStats();
+    const byStatus = (re) => list.filter(m => re.test(String(m.status || '')));
+    const read = byStatus(/^read/i);
+    const late = byStatus(/november 2026/i);
+    const notHeld = byStatus(/not held/i);
+    const notRead = byStatus(/not read/i);
+    const empty = byStatus(/empty/i);
+    const years = read.map(m => parseInt(m.year, 10)).filter(Number.isFinite);
+    const series = (cat) => read.filter(m => m.category === cat).length;
+    const names = (arr) => listJoin(arr.map(m => 'the ' + ordinal(m.meeting_number) + ' ' + String(m.category).toLowerCase() + ' meeting' + (m.year ? ' (' + m.year + ')' : '')));
+    // Gaps in each numbered series between the first and last meeting listed.
+    const gaps = [];
+    ['Agricultural', 'Horticultural'].forEach(cat => {
+      const nums = list.filter(m => m.category === cat).map(m => Number(m.meeting_number)).filter(Number.isFinite);
+      if (!nums.length) return;
+      const have = new Set(nums), lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums);
+      const miss = []; for (let k = lo; k <= hi; k++) if (!have.has(k)) miss.push(ordinal(k));
+      gaps.push(miss.length ? 'the ' + listJoin(miss) + ' ' + cat.toLowerCase() + ' meeting' + (miss.length > 1 ? 's are' : ' is') + ' missing from the CSC list between the ' + ordinal(lo) + ' and the ' + ordinal(hi)
+        : 'the ' + cat.toLowerCase() + ' series runs without a gap from the ' + ordinal(lo) + ' to the ' + ordinal(hi) + ' meeting');
+    });
+    const so = s.src['Seednet only'];
+    const soResearched = STATE.all.filter(r => r.seednetOnly && r.researched).length;
+    const soContact = STATE.all.filter(r => r.seednetOnly && r.hasContact === 'Yes').length;
+    let p1 = 'The dataset holds ' + n(s.total) + ' varieties. Of these, ' + n(s.inCsc) + ' come from ' + n(read.length) + ' sets of CSC minutes'
+      + (years.length ? ' dated ' + Math.min.apply(null, years) + ' to ' + Math.max.apply(null, years) : '')
+      + ', ' + n(series('Agricultural')) + ' for agricultural crops and ' + n(series('Horticultural')) + ' for horticultural crops.';
+    if (c.csc_documents_listed) p1 += ' The CSC minutes page lists ' + n(c.csc_documents_listed) + ' sets in all.';
+    if (notHeld.length) p1 += ' For ' + names(notHeld) + ' the page lists the minutes, but the PDF is not held here.';
+    const word = (k) => ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'][k] || n(k);
+    if (late.length) p1 += ' ' + word(late.length) + (late.length === 1 ? ' set, ' : ' sets, ') + names(late) + ', ' + (late.length === 1 ? 'was' : 'were') + ' missed in 2025 and read in November 2026.';
+    if (notRead.length) p1 += ' ' + capFirst(names(notRead)) + (notRead.length > 1 ? ' are' : ' is') + ' held but has not been read.';
+    if (empty.length) p1 += ' The file for ' + names(empty) + ' is empty.';
+    if (gaps.length) p1 += ' In the numbering, ' + gaps.join(', and ') + '.';
+    const soGraded = STATE.all.filter(r => r.seednetOnly && r.graded).length;
+    const p2 = so ? 'The other ' + n(so) + ' varieties are notified on Seednet but do not appear in the CSC minutes held. For these the dataset has the Seednet record only, with no CSC decision; '
+      + (soResearched ? n(soResearched) + ' of them have web research' : 'none of them has web research') + ', ' + n(soGraded) + ' carry a stress grade read from the official Seednet text, and ' + n(soContact) + ' have contact details of an institution.' : '';
+    const rows = list.map(m => {
+      const gov = httpUrl(m.government_url), arc = httpUrl(m.archived_copy);
+      const cnt = m.count || 0;
+      const cntHtml = cnt ? '<a href="?minutes=' + encodeURIComponent(m.key) + '#all" class="minutes-filter" data-key="' + esc(m.key) + '">' + n(cnt) + '</a>' : '';
+      return '<tr>'
+        + '<td data-label="Series">' + esc(m.category || '') + '</td>'
+        + '<td data-label="Meeting">' + esc(ordinal(m.meeting_number)) + '</td>'
+        + '<td data-label="Year"' + (m.year ? '' : ' data-empty') + '>' + esc(m.year || '') + '</td>'
+        + '<td data-label="Status">' + esc(capFirst(String(m.status || ''))) + '</td>'
+        + '<td data-label="Varieties in the dataset"' + (cnt ? '' : ' data-empty') + ' class="num">' + cntHtml + '</td>'
+        + '<td data-label="Government PDF"' + (gov ? '' : ' data-empty') + '>' + (gov ? linkHtml(gov, 'PDF') : '') + '</td>'
+        + '<td data-label="Archived copy"' + (arc ? '' : ' data-empty') + '>' + (arc ? linkHtml(arc, 'Archived copy') : '') + '</td>'
+        + '</tr>';
+    }).join('');
+    setText('modal-title', 'Coverage');
+    $('modal-sub').hidden = true;
+    $('modal-tabs').hidden = true; $('modal-tabs').innerHTML = '';
+    const body = $('modal-body');
+    body.removeAttribute('role'); body.removeAttribute('aria-labelledby');
+    body.innerHTML = '<div class="about">' + p(p1) + p(p2) + '</div>'
+      + '<h3 class="cov-h">CSC minutes</h3>'
+      + '<p class="note">Select a count to show only the varieties from that set of minutes. A blank count means no variety in the dataset comes from it.</p>'
+      + '<div class="table-scroll"><table class="data-table cov-table"><caption class="visually-hidden">Sets of CSC minutes and the varieties taken from each</caption>'
+      + '<thead><tr><th scope="col">Series</th><th scope="col">Meeting</th><th scope="col">Year</th><th scope="col">Status</th><th scope="col" class="num">Varieties in the dataset</th><th scope="col">Government PDF</th><th scope="col">Archived copy</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table></div>';
+    body.querySelectorAll('.minutes-filter').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      resetFilters();
+      $('filter-minutes').value = a.dataset.key;
+      STATE.modal.lastFocus = $('result-count');
+      closeModal(true);
+      history.replaceState(null, '', location.pathname + location.search);
+      applyFilters();
+      $('result-count').scrollIntoView({ block: 'start' });
+    }));
+    showModal(true);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * About dialog                                                       *
+   * ------------------------------------------------------------------ */
+
+  function openAbout() {
+    STATE.modal.mode = 'about';
+    STATE.modal.record = null;
+    if (!STATE.modal.open) STATE.modal.lastFocus = document.activeElement;
+    STATE.modal.open = true;
+    const s = datasetStats();
+    const o = s.outcome;
+    const outcomeText = outcomeSentence(s);
+    setText('modal-title', 'About the data');
+    $('modal-sub').hidden = true;
+    $('modal-tabs').hidden = true; $('modal-tabs').innerHTML = '';
+    const body = $('modal-body');
+    body.removeAttribute('role'); body.removeAttribute('aria-labelledby');
+    body.innerHTML = '<div class="about">'
+      + '<h3>What this is</h3>'
+      + '<p>This seed variety dashboard covers ' + n(s.total) + ' crop varieties across ' + n(s.crops) + ' crops and ' + n(s.states) + ' states and union territories. ' + esc(sourceSentence(s).replace(/^This page lists [\d,]+ crop varieties\. /, '')) + ' ' + esc(outcomeText) + ' Each row is one variety, with its entry in the CSC minutes, its Seednet record where one exists, web research where it has been run, publications that mention it, and contact details of the developing institution. It is maintained by Precision Development (PxD).</p>'
+      + '<p>Stress tolerance is one attribute among several and is shown only where there is evidence for it.</p>'
+      + '<h3>Where the data come from</h3>'
+      + '<ul>'
+      + '<li>The CSC meeting minutes (PDF files) give the variety, crop, meeting, decision and developing institution, and, where the minutes state them, parentage, breeding method and special traits. Every record drawn from the minutes names its source document and, where one was found, links to the PDF and an archived copy.</li>'
+      + '<li>Seednet (seednet.gov.in), the Government of India seed portal, gives the notification number and date, parentage, recommended ecology, yield and other official fields for the ' + n(s.seednet) + ' of ' + n(s.total) + ' varieties linked to a Seednet record.</li>'
+      + '<li>Google Scholar results, archived in 2025, and OpenAlex list works that mention the variety name; ' + n(s.withPubs) + ' of ' + n(s.total) + ' varieties have at least one. These are mentions, not necessarily studies of the variety.</li>'
+      + '<li>Institution websites and directories give the contact details of the developing institution, available for ' + n(s.withContact) + ' of ' + n(s.total) + ' varieties.</li>'
+      + '<li>Web research by language models, with cited sources, covers ' + n(s.researched) + ' of ' + n(s.total) + ' varieties; ' + n(s.waveAug) + ' were researched in August 2025 and ' + n(s.waveOct) + ' in October and November 2026. It covers stress tolerance, agronomy, genetics and breeding.</li>'
+      + '</ul>'
+      + '<h3>How the Seednet link is decided</h3>'
+      + '<p>A variety is linked to a Seednet record only when the crop is the same and the name is the same, including the variety number. Small spelling differences are accepted, and ' + n(s.seednetSpelling) + ' of the ' + n(s.seednet) + ' links rest on such a match. A fuzzy name match used in 2025 had linked some varieties to the Seednet record of a different variety; it was replaced in November 2026. For ' + n(s.differentVariety) + ' varieties the nearest Seednet entry is a different variety, and the record says so without using it.</p>'
+      + '<h3>How stress tolerance is graded</h3>'
+      + '<p>The research summary first gives a level for drought, heat, salinity, flood and submergence from its cited sources. A separate check then counts the independent sources that name the exact variety and support each claim. Two or more such sources give the grade "two or more sources", one gives "one source", and a claim with no such source is "claimed, not confirmed".</p>'
+      + '<p>Of all ' + n(s.total) + ' varieties, ' + n(s.ev['Two or more sources']) + ' are graded two or more sources, ' + n(s.ev['One source']) + ' one source, ' + n(s.ev['Claimed, not confirmed']) + ' claimed but not confirmed, and ' + n(s.ev['None found']) + ' none found; the other ' + n(s.ev['Not graded']) + ' are not graded. "Not graded" means the variety has had no web research and its official record has no stress text that could be graded. These are the counts the Stress evidence filter shows.'
+      + (s.officialGraded ? ' Of the graded varieties, ' + n(s.officialGraded) + ' have no web research and were graded from the official Seednet text alone; ' + n(s.officialGradedYes) + ' of them have a supported tolerance.' : '') + '</p>'
+      + '<p>"None found" means that the searches found no statement of tolerance; it is not evidence that the variety lacks tolerance, and not that the variety is susceptible. For ' + n(s.noteDisputes) + ' of the ' + n(s.supported) + ' varieties with a supported tolerance, the reviewer of the check left a caveat; it is shown at the top of the Stress evidence tab and should be read before the grade is used.</p>'
+      + '<h3>Limitations</h3>'
+      + '<ul>'
+      + '<li>The research summaries were written by language models. They are leads to check against the linked sources, not official data, and some figures in them (yields in particular) are implausible.</li>'
+      + '<li>' + n(s.notResearched) + ' of ' + n(s.total) + ' varieties have the official record only; web research has not been run for them.</li>'
+      + '<li>The OpenAlex lookup is incomplete, so a variety with no listed publication may still have been studied.</li>'
+      + '<li>Contact details are for the developing institution, not always the individual breeder, and may be out of date.</li>'
+      + '<li>A blank field means the source does not state the value. It never means zero or none.</li>'
+      + '</ul>'
+      + '<h3>Data and code</h3>'
+      + '<p>The dataset, the pipeline and the documentation are in the repository linked as "Data and code" in the header.' + (formatBuilt(STATE.meta.built) ? ' This build of the data was compiled on ' + formatBuilt(STATE.meta.built) + '.' : '') + ' Each record has a permanent link, shown in its Record tab. A filtered view of the list can be shared by copying the address, and the address ending #all shows every variety.</p>'
+      + '</div>';
+    showModal(true);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Modal shell                                                        *
+   * ------------------------------------------------------------------ */
+
+  function showModal(focus) {
+    const m = $('detail-modal');
+    const wasHidden = m.hidden;
+    m.hidden = false;
+    document.body.classList.add('modal-open');
+    if (wasHidden) $('modal-panel').scrollTop = 0;
+    if (focus || wasHidden) requestAnimationFrame(() => { const c = $('modal-close'); if (c) c.focus(); });
+  }
+
+  function closeModal(fromRoute) {
+    $('detail-modal').hidden = true;
+    document.body.classList.remove('modal-open');
+    STATE.modal.open = false; STATE.modal.record = null; STATE.modal.mode = 'variety';
+    if (!fromRoute) setHash('');
+    const f = STATE.modal.lastFocus;
+    STATE.modal.lastFocus = null;
+    if (f && document.body.contains(f) && typeof f.focus === 'function') { try { f.focus(); } catch (_) { /* detached */ } }
   }
 
   function onModalKeydown(e) {
     if (!STATE.modal.open) return;
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeModal();
-      return;
-    }
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
     if (e.key !== 'Tab') return;
-    // Focus trap: keep tab navigation inside the modal panel only.
-    const panel = $('detail-modal').querySelector('.modal__panel');
-    const focusable = Array.prototype.filter.call(
-      panel.querySelectorAll(focusableSelector()),
-      (el) => !el.disabled && el.offsetParent !== null
-    );
-    if (!focusable.length) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault(); last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault(); first.focus();
-    }
-  }
-
-  function focusableSelector() {
-    return 'a[href], button:not([disabled]), input:not([disabled]), '
-      + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-  }
-
-  function copyToClipboard(text, btn) {
-    if (!navigator.clipboard) return;
-    navigator.clipboard.writeText(text).then(() => {
-      const prev = btn.textContent;
-      btn.textContent = 'Copied';
-      setTimeout(() => { btn.textContent = prev; }, 1200);
-    });
+    const panel = $('modal-panel');
+    const f = Array.prototype.filter.call(panel.querySelectorAll('a[href], button:not([disabled]), input, select, summary, [tabindex="0"]'),
+      el => el.offsetParent !== null && el.getAttribute('tabindex') !== '-1');
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 
   /* ------------------------------------------------------------------ *
-   * CSV export (RFC 4180)                                              *
+   * CSV export                                                         *
    * ------------------------------------------------------------------ */
 
   function exportFilteredCSV() {
-    if (!STATE.filtered.length) {
-      // Better than silently producing an empty file.
-      alert('No varieties to export. Adjust filters and try again.');
-      return;
-    }
+    if (!STATE.filtered.length) { setText('result-count', 'No varieties to export; clear some filters first.'); return; }
     const cols = [
-      'variety_id', 'crop', 'variety_name', 'year_of_release', 'stress_tolerance',
-      'key_attributes', 'states_acronyms', 'seasons', 'days_to_maturity',
-      'evidence_quality', 'seednet_available', 'seednet_url', 'query_links_count',
-      'seednet_match_status', 'enrichment_wave', 'stress_confirmation_level', '_stress_types_display'
+      ['record', r => r.slug], ['crop', r => r.crop], ['variety', r => r.name], ['year_considered', r => r.year || ''],
+      ['outcome', r => r.outcome === 'Not stated' ? '' : r.outcome], ['states', r => r.states.join('; ')],
+      ['stress_evidence', r => r.evidence === 'Not graded' ? '' : r.evidence], ['stress_types_confirmed', r => r.typesConfirmed.join('; ')],
+      ['seednet_linked', r => r.hasSeednet ? 'yes' : ''], ['seednet_url', r => r.hasSeednet ? r.seednetUrl : ''],
+      ['developing_institution', r => r.institution], ['contact_details_available', r => r.hasContact === 'Yes' ? 'yes' : 'no'],
+      ['researched', r => r.researched ? 'yes' : 'no'], ['research_period', r => r.waveLabel],
+      ['record_source', r => r.source], ['publications', r => r.pubs || ''], ['csc_source_document', r => clean((r.raw.official_sources || {}).csc_source_document) || clean((r.raw.csc_fields || {}).source_document_filename)],
+      ['csc_minutes_url', r => httpUrl((r.raw.official_sources || {}).csc_minutes_url)], ['csc_minutes_archived_url', r => httpUrl((r.raw.official_sources || {}).csc_minutes_archived_url)],
+      ['permalink', r => location.origin + location.pathname + '#' + r.slug]
     ];
-    const lines = [cols.join(',')];
-    STATE.filtered.forEach(r => {
-      lines.push(cols.map(k => csvField(
-        k === 'days_to_maturity' ? r._dtm_raw : k === 'seednet_available' ? r._has_seednet : Array.isArray(r[k]) ? r[k].join('; ') : r[k]
-      )).join(','));
-    });
-    // Excel-friendly UTF-8 BOM + CRLF line endings per RFC 4180.
-    const csv = '\uFEFF' + lines.join('\r\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const csvField = (v) => { let s = String(v == null ? '' : v); if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"'; return s; };
+    const lines = [cols.map(c => c[0]).join(',')].concat(sortData(STATE.filtered).map(r => cols.map(c => csvField(c[1](r))).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const date = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = 'pxd_sts_varieties_' + date + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = url; a.download = 'seed_varieties_india_' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
-  // RFC 4180: quote any field containing comma, double-quote, CR, or LF.
-  // Internal double-quotes are escaped by doubling. Booleans serialised
-  // as 'true'/'false' so the export round-trips through Excel cleanly.
-  function csvField(v) {
-    if (v == null) return '';
-    let s = (typeof v === 'boolean') ? (v ? 'true' : 'false') : String(v);
-    if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
-    return s;
-  }
-
   /* ------------------------------------------------------------------ *
-   * Loading + error UI                                                 *
+   * Loading + errors                                                   *
    * ------------------------------------------------------------------ */
 
   function showLoading() { $('loading-overlay').hidden = false; }
   function hideLoading() { $('loading-overlay').hidden = true; }
-
   function showError(detail) {
-    const banner = $('error-banner');
-    const fileHint = window.location.protocol === 'file:'
-      ? ' This page was opened via file://. Browsers block local fetch() under that scheme — start a local server (e.g., `python -m http.server`) and reopen at http://127.0.0.1:8000/ instead.'
-      : '';
-    setText('error-banner-detail', (detail || 'Unknown fetch error.') + fileHint);
-    banner.hidden = false;
-    setText('result-count', 'Data unavailable');
+    const hint = location.protocol === 'file:' ? ' The page was opened as a local file; browsers block loading the data that way. Serve the folder with a local web server and open it over http.' : '';
+    setText('error-banner-detail', (detail || 'Unknown error.') + hint);
+    $('error-banner').hidden = false;
+    setText('result-count', 'The data could not be loaded.');
   }
   function hideError() { $('error-banner').hidden = true; }
 
+  // Exposed for automated checks only.
+  window.__seedVarieties = { STATE: STATE, buildView: buildView, openRecord: openRecord };
 })();
