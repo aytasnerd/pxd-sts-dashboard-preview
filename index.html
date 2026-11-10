@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Stress-Tolerant Seed Varieties Dashboard for India — a reference catalogue combining Seednet (Government of India) variety records with curated research evidence." />
-  <title>Stress-Tolerant Seed Varieties of India — Precision Development</title>
+  <meta name="description" content="Seed Varieties of India — a seed variety dashboard of crop varieties considered by the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC), with official records, Seednet links, research evidence, stress tolerance and institution contacts." />
+  <title>Seed Varieties of India — Precision Development</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css?v=20261022p" />
+  <link rel="stylesheet" href="./style.css?v=20261110e" />
 </head>
 <body>
   <!--
@@ -23,8 +23,8 @@
       <div class="app-header__brand">
         <img src="PxD_logo.png" alt="Precision Development logo" class="app-header__logo" />
         <div class="app-header__titles">
-          <h1 class="app-header__title">Stress-Tolerant Seed Varieties of India</h1>
-          <p class="app-header__subtitle">A reference catalogue by Precision Development</p>
+          <h1 class="app-header__title">Seed Varieties of India</h1>
+          <p class="app-header__subtitle">Seed variety dashboard — CSC releases, official records, research evidence and stress tolerance</p>
         </div>
       </div>
       <nav class="app-header__nav" aria-label="Primary actions">
@@ -38,8 +38,8 @@
   <main id="main" class="container" role="main">
     <!-- KPIs: values populated by script.js after fetch; aria-busy until then. -->
     <section class="about-summary" aria-label="About this dataset">
-      <p>Reference catalogue of <strong id="about-count">—</strong> stress-tolerant seed varieties released in India (Central Sub-Committee on Crop Standards, Notification and Release of Varieties), each matched to its Seednet (Government of India) record. Every row links to its official sources, the developing institution and its contact details, published research (Google Scholar, OpenAlex) and an evidence-based reading of drought, heat, salinity, flood and submergence tolerance.</p>
-      <p class="muted">Open a row for the full evidence. Research summaries were produced by language models from web searches (Aug 2025 and Oct 2026) and always cite their sources; treat them as leads to verify, not as official data.</p>
+      <p id="intro-text">Seed variety dashboard of <strong id="about-count">—</strong> crop varieties considered by the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC).</p>
+      <p class="muted">Open a row for the full record. Research summaries were written by language models from web searches (Aug 2025 and Oct–Nov 2026) and cite their sources; treat them as leads to verify, not as official data.</p>
     </section>
 
     <!--
@@ -99,8 +99,16 @@
           <select id="filter-stress-type" class="input"></select>
         </div>
         <div class="filter-group">
-          <label for="filter-source">Data Source</label>
-          <select id="filter-source" class="input"></select>
+          <label for="filter-stress-evidence">Stress evidence</label>
+          <select id="filter-stress-evidence" class="input"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-research">Research status</label>
+          <select id="filter-research" class="input"></select>
+        </div>
+        <div class="filter-group">
+          <label for="filter-seednet">Seednet record</label>
+          <select id="filter-seednet" class="input"></select>
         </div>
         <div class="filter-group">
           <label for="filter-institution">Institution</label>
@@ -179,7 +187,7 @@
 
   <footer class="app-footer" role="contentinfo">
     <div class="container app-footer__inner">
-      <p class="app-footer__copy">© Precision Development · Stress-Tolerant Seed Varieties of India · Sources and methods: see "About the data".</p>
+      <p class="app-footer__copy">© Precision Development · Seed Varieties of India · Sources and methods: see "About the data".</p>
     </div>
   </footer>
 
@@ -210,6 +218,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=handover_v2_20261022r" defer></script>
+  <script src="./script.js?v=20261110d" defer></script>
 </body>
 </html>
