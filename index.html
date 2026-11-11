@@ -8,7 +8,7 @@
   <meta name="description" content="Seed variety dashboard of crop varieties considered by India's Central Sub-Committee on Crop Standards, Notification and Release of Varieties, with official records, contacts and research evidence." />
   <title>Seed Varieties of India</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css?v=20261110r28" />
+  <link rel="stylesheet" href="./style.css?v=20261110r32" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to the list of varieties</a>
@@ -45,16 +45,16 @@
           <summary id="filter-summary">Filter the list</summary>
           <div class="filters__body">
             <div class="filter-group">
-              <label for="filter-crop">Crop</label>
-              <select id="filter-crop" class="input"></select>
+              <label for="filter-stress-type">Stress type</label>
+              <select id="filter-stress-type" class="input"></select>
             </div>
             <div class="filter-group">
-              <label for="filter-state">State</label>
+              <label for="filter-state">State or region</label>
               <select id="filter-state" class="input"></select>
             </div>
             <div class="filter-group">
-              <label for="filter-stress-type">Stress type</label>
-              <select id="filter-stress-type" class="input"></select>
+              <label for="filter-crop">Crop</label>
+              <select id="filter-crop" class="input"></select>
             </div>
             <div class="filter-group">
               <label for="filter-stress-evidence">Stress evidence</label>
@@ -103,7 +103,8 @@
 
       <div class="results">
         <section class="intro" aria-label="About this page">
-          <p id="intro-text">A register of crop varieties of India, drawn from the minutes of the Central Sub-Committee on Crop Standards and from Seednet, with official records, contacts of the developing institutions and research evidence on stress tolerance.</p>
+          <p id="intro-text" class="lead-statement">A register of crop varieties of India for finding stress-tolerant varieties to promote: what each tolerates, where it is recommended, how well that is evidenced, and whom to contact.</p>
+          <dl id="facts" class="facts"></dl>
         </section>
 
         <div class="search-row">
@@ -170,6 +171,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20261110r28" defer></script>
+  <script src="./script.js?v=20261110r32" defer></script>
 </body>
 </html>

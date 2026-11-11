@@ -21,17 +21,18 @@
     { key: 'crop', label: 'Crop' },
     { key: 'variety', label: 'Variety', alwaysVisible: true },
     { key: 'year', label: 'Year', title: 'Year considered by the CSC, or year of release for varieties on Seednet only' },
-    { key: 'outcome', label: 'Decision', title: 'Decision of the CSC' },
-    { key: 'sources', label: 'Source', title: 'Source of the record' },
     { key: 'stress', label: 'Stress tolerance' },
     { key: 'states', label: 'States' },
+    { key: 'outcome', label: 'Decision', title: 'Decision of the CSC', optional: true },
+    { key: 'sources', label: 'Source', title: 'Source of the record', optional: true },
     { key: 'seednet', label: 'Seednet record', optional: true },
     { key: 'institution', label: 'Developing institution', optional: true },
     { key: 'pubs', label: 'Publications', optional: true }
   ];
   const OUTCOMES = ['Approved', 'Deferred', 'Rejected', 'Not stated', 'Not in the CSC minutes held'];
   const SOURCES = ['CSC minutes and Seednet', 'CSC minutes only', 'Seednet only'];
-  const DEFAULT_VIEW = { researched: 'Yes' };
+  const DEFAULT_VIEW = { evidence: 'Supported' };
+  const SUPPORTED = 'Supported';
   const STRESS_KEYS = ['drought', 'heat', 'salinity', 'flood', 'submergence'];
   const STRESS_NAME = { drought: 'Drought', heat: 'Heat', salinity: 'Salinity', salt: 'Salinity', flood: 'Flood', submergence: 'Submergence' };
   const EVIDENCE_LABEL = {
@@ -101,7 +102,7 @@
 
   const STATE = {
     all: [], filtered: [], bySlug: new Map(),
-    sort: { key: 'crop', dir: 'asc' }, sorted: null, coverage: null, minutesByKey: new Map(),
+    sort: { key: 'stress', dir: 'asc' }, sorted: null, coverage: null, minutesByKey: new Map(),
     page: { size: 25, index: 1 },
     columns: COLUMNS.reduce((a, c) => { a[c.key] = !c.optional; return a; }, {}),
     modal: { open: false, record: null, tab: 'record', lastFocus: null, mode: 'variety' },
@@ -450,6 +451,7 @@
     fillSelect('filter-stress-type', v.stressTypes);
     const evPresent = EVIDENCE_ORDER.filter(l => STATE.all.some(r => r.evidence === l));
     fillSelect('filter-stress-evidence', evPresent, evPresent.map(l => l + ' (' + n(count(r => r.evidence === l)) + ')'));
+    { const sel = $('filter-stress-evidence'); const o = document.createElement('option'); o.value = SUPPORTED; o.textContent = 'At least one source (' + n(count(r => r.evidence === 'Two or more sources' || r.evidence === 'One source')) + ')'; sel.insertBefore(o, sel.options[1]); }
     const oc = OUTCOMES.filter(o => STATE.all.some(r => r.outcome === o));
     fillSelect('filter-outcome', oc, oc.map(o => o + ' (' + n(count(r => r.outcome === o)) + ')'));
     const srcs = SOURCES.filter(x => STATE.all.some(r => r.source === x));
@@ -489,7 +491,7 @@
       if (crop && r.crop !== crop) return false;
       if (st && r.states.indexOf(st) === -1) return false;
       if (stype && r.stressTypes.indexOf(stype) === -1) return false;
-      if (ev && r.evidence !== ev) return false;
+      if (ev && (ev === SUPPORTED ? (r.evidence !== 'Two or more sources' && r.evidence !== 'One source') : r.evidence !== ev)) return false;
       if (oc && r.outcome !== oc) return false;
       if (source && r.source !== source) return false;
       if (minutesKey && r.minutesKey !== minutesKey) return false;
@@ -535,10 +537,11 @@
     history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
   }
   function applyDefaultView() {
-    $('filter-research').value = DEFAULT_VIEW.researched;
+    $('filter-stress-evidence').value = DEFAULT_VIEW.evidence;
+    STATE.sort = { key: 'stress', dir: 'asc' };
   }
   function isDefaultView() {
-    return $('filter-research').value === DEFAULT_VIEW.researched && activeFilterCount() === 1;
+    return $('filter-stress-evidence').value === DEFAULT_VIEW.evidence && activeFilterCount() === 1;
   }
 
   function activeFilterCount() {
@@ -626,8 +629,14 @@
   }
 
   function renderIntro() {
-    $('intro-text').innerHTML = 'A register of crop varieties of India, drawn from the minutes of the Central Sub-Committee on Crop Standards and from Seednet, with official records, contacts of the developing institutions and research evidence on stress tolerance. '
-      + 'Open a variety to see its record and sources; ' + (STATE.coverage ? '<a href="#coverage">Coverage</a> lists the minutes held and ' : '') + '<a href="#about">About the data</a> explains the sources and their limits.';
+    const cov = STATE.coverage && Array.isArray(STATE.coverage.minutes) ? STATE.coverage.minutes : [];
+    const cy = cov.filter(m => /^read/i.test(String(m.status || ''))).map(m => parseInt(m.year, 10)).filter(Number.isFinite);
+    const sy = STATE.all.filter(r => r.seednetOnly && r.year).map(r => r.year);
+    const period = (cy.length ? 'CSC minutes of ' + Math.min.apply(null, cy) + ' to ' + Math.max.apply(null, cy) : 'CSC minutes')
+      + (sy.length ? '; Seednet notifications from ' + Math.min.apply(null, sy) : '');
+    const facts = [['Period covered', period], ['Sources', 'CSC minutes, Seednet, published research'],
+      ['Stresses', 'Drought, heat, salinity, flood, submergence'], ['Updated', formatBuilt(STATE.meta.built)]];
+    $('facts').innerHTML = facts.filter(f => f[1]).map(f => '<div><dt>' + esc(f[0]) + '</dt><dd>' + esc(f[1]) + '</dd></div>').join('');
   }
 
   const FILTER_NAMES = [['filter-search', 'search'], ['filter-crop', 'crop'], ['filter-state', 'state'], ['filter-stress-type', 'stress type'],
@@ -637,7 +646,7 @@
     const el = $('result-count');
     if (!STATE.all.length) { el.textContent = 'No varieties loaded.'; return; }
     if (isDefaultView()) {
-      el.innerHTML = 'Showing varieties that have web research. <a href="#all" id="default-clear">Show all varieties.</a>';
+      el.innerHTML = 'Showing varieties with a stress tolerance supported by at least one source. <a href="#all" id="default-clear">Show all varieties.</a>';
       return;
     }
     const parts = FILTER_NAMES.map(([id, label]) => {
@@ -686,7 +695,8 @@
   }
 
   function statesText(rec) {
-    const s = rec.states;
+    const pick = $('filter-state') ? $('filter-state').value : '';
+    const s = pick && rec.states.indexOf(pick) !== -1 ? [pick].concat(rec.states.filter(x => x !== pick)) : rec.states;
     if (s.length <= 3) return listJoin(s);
     return s.slice(0, 3).join(', ') + ' and ' + (s.length - 3) + ' more';
   }
@@ -728,11 +738,13 @@
     const coll = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
     return data.slice().sort((a, b) => {
       const av = sortValue(key, a), bv = sortValue(key, b);
-      if (av == null && bv == null) return coll.compare(a.name, b.name);
+      if (av == null && bv == null) return coll.compare(a.crop, b.crop) || coll.compare(a.name, b.name);
       if (av == null) return 1;
       if (bv == null) return -1;
       const c = (typeof av === 'number' && typeof bv === 'number') ? av - bv : coll.compare(String(av), String(bv));
-      return c ? c * mul : coll.compare(a.name, b.name);
+      if (c) return c * mul;
+      if (key === 'stress') { const cc = coll.compare(a.crop, b.crop); if (cc) return cc; }
+      return coll.compare(a.name, b.name);
     });
   }
 
@@ -1447,36 +1459,115 @@
    * About dialog                                                       *
    * ------------------------------------------------------------------ */
 
+  /* ---------- Figures for About the data (inline SVG, no library) ---------- */
+
+  const isSupported = (r) => r.evidence === 'Two or more sources' || r.evidence === 'One source';
+
+  function figureData() {
+    const all = STATE.all;
+    const csc = all.filter(r => !r.seednetOnly);
+    const years = []; for (let y = 2008; y <= 2025; y++) years.push(y);
+    const f1 = years.map(y => { const rs = csc.filter(r => r.year === y); const a = rs.filter(isSupported).length; return { label: String(y), a: a, b: rs.length - a }; });
+    const sup = all.filter(isSupported);
+    const f2 = STRESS_KEYS.map(k => {
+      const name = STRESS_NAME[k];
+      const two = sup.filter(r => r.typesConfirmed.indexOf(name) !== -1 && r.typesMulti.indexOf(name) !== -1).length;
+      const one = sup.filter(r => r.typesConfirmed.indexOf(name) !== -1 && r.typesMulti.indexOf(name) === -1).length;
+      return { label: name, a: two, b: one };
+    });
+    const byCrop = new Map();
+    all.forEach(r => { if (!r.crop) return; const o = byCrop.get(r.crop) || { label: r.crop, a: 0, total: 0 }; o.total++; if (isSupported(r)) o.a++; byCrop.set(r.crop, o); });
+    const f3 = Array.from(byCrop.values()).filter(o => o.a > 0).sort((x, y) => y.a - x.a || x.label.localeCompare(y.label)).slice(0, 15);
+    const byState = new Map();
+    sup.forEach(r => r.states.forEach(st => byState.set(st, (byState.get(st) || 0) + 1)));
+    const statesWith = byState.size;
+    const f4 = Array.from(byState.entries()).map(([label, a]) => ({ label: label, a: a })).sort((x, y) => y.a - x.a || x.label.localeCompare(y.label)).slice(0, 15);
+    const cscRange = csc.filter(r => r.year >= 2008 && r.year <= 2025);
+    return { f1, f2, f3, f4, supTotal: sup.length, cscRangeTotal: cscRange.length, cscRangeSup: cscRange.filter(isSupported).length, statesWith: statesWith };
+  }
+
+  function hbarSVG(rows, mode, ariaLabel) {
+    // mode 'stack': teal a then grey b; mode 'ref': grey total behind teal a; mode 'single': teal a.
+    const narrow = window.innerWidth < 600;
+    const W = narrow ? 370 : 680, L = narrow ? 198 : 210, R = narrow ? 30 : 70, H = 24, barH = 14;
+    const max = Math.max.apply(null, rows.map(r => mode === 'stack' ? r.a + r.b : mode === 'ref' ? r.total : r.a).concat([1]));
+    const sx = (v) => (W - L - R) * v / max;
+    const h = rows.length * H + 8;
+    let g = '<line x1="' + L + '" x2="' + L + '" y1="0" y2="' + (h - 4) + '" class="fig-axis"/>';
+    rows.forEach((r, i) => {
+      const y = i * H + 4, ty = y + barH - 2;
+      const label = r.total != null ? r.label + ' (' + n(r.a) + ' of ' + n(r.total) + ')' : r.label;
+      g += '<text x="0" y="' + ty + '" class="fig-label">' + esc(label) + '</text>';
+      if (mode === 'ref') g += '<rect x="' + L + '" y="' + y + '" width="' + sx(r.total).toFixed(1) + '" height="' + barH + '" class="fig-sec"/>';
+      g += '<rect x="' + L + '" y="' + y + '" width="' + sx(r.a).toFixed(1) + '" height="' + barH + '" class="fig-main"/>';
+      let end = sx(r.a);
+      if (mode === 'stack') { g += '<rect x="' + (L + sx(r.a)).toFixed(1) + '" y="' + y + '" width="' + sx(r.b).toFixed(1) + '" height="' + barH + '" class="fig-sec"/>'; end = sx(r.a + r.b); }
+      if (mode === 'ref') end = sx(r.total);
+      const val = mode === 'stack' ? n(r.a + r.b) : n(r.a);
+      g += '<text x="' + (L + end + 6).toFixed(1) + '" y="' + ty + '" class="fig-value">' + val + '</text>';
+    });
+    return '<svg viewBox="0 0 ' + W + ' ' + h + '" class="fig" role="img" aria-label="' + esc(ariaLabel) + '">' + g + '</svg>';
+  }
+
+  function vbarSVG(rows, ariaLabel) {
+    const W = window.innerWidth < 600 ? 370 : 680, H = 220, top = 16, bottom = 28, left = 8, bw = (W - left) / rows.length;
+    const max = Math.max.apply(null, rows.map(r => r.a + r.b).concat([1]));
+    const sy = (v) => (H - top - bottom) * v / max;
+    let g = '<line x1="0" x2="' + W + '" y1="' + (H - bottom) + '" y2="' + (H - bottom) + '" class="fig-axis"/>';
+    rows.forEach((r, i) => {
+      const x = left + i * bw + 3, w = bw - 6, base = H - bottom;
+      const ha = sy(r.a), hb = sy(r.b);
+      g += '<rect x="' + x.toFixed(1) + '" y="' + (base - ha).toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + ha.toFixed(1) + '" class="fig-main"/>';
+      g += '<rect x="' + x.toFixed(1) + '" y="' + (base - ha - hb).toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + hb.toFixed(1) + '" class="fig-sec"/>';
+      g += '<text x="' + (x + w / 2).toFixed(1) + '" y="' + (base - ha - hb - 4).toFixed(1) + '" class="fig-value" text-anchor="middle">' + n(r.a + r.b) + '</text>';
+      g += '<text x="' + (x + w / 2).toFixed(1) + '" y="' + (H - 10) + '" class="fig-label" text-anchor="middle">' + (i % 2 === 0 || rows.length < 12 ? esc("'" + r.label.slice(2)) : '') + '</text>';
+    });
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="fig" role="img" aria-label="' + esc(ariaLabel) + '">' + g + '</svg>';
+  }
+
+  function figTable(head, rows) {
+    return '<details class="more fig-table"><summary>Show the table</summary><table class="numbers"><thead><tr>' + head.map((h, i) => '<th' + (i ? ' class="num"' : '') + '>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>'
+      + rows.map(r => '<tr>' + r.map((c, i) => '<td' + (i ? ' class="num"' : '') + '>' + esc(typeof c === 'number' ? n(c) : c) + '</td>').join('') + '</tr>').join('') + '</tbody></table></details>';
+  }
+
+  function figure(id, title, caption, svg, table) {
+    return '<figure class="figure" id="' + id + '"><figcaption><span class="fig-title">' + esc(title) + '</span><span class="fig-caption">' + esc(caption) + '</span></figcaption>' + svg
+      + '<p class="fig-key"><span class="key key--main"></span>' + esc(table.keyMain) + (table.keySec ? '<span class="key key--sec"></span>' + esc(table.keySec) : '') + '</p>' + table.html + '</figure>';
+  }
+
+  function aboutFigures() {
+    const d = figureData();
+    window.__seedVarieties.figures = d;
+    const f1tot = d.f1.reduce((a, r) => a + r.a + r.b, 0), f1sup = d.f1.reduce((a, r) => a + r.a, 0);
+    const f2 = figure('fig-1', 'Varieties by year', 'Of the ' + n(f1tot) + ' varieties in the CSC minutes of 2008 to 2025, ' + n(f1sup) + ' have a stress tolerance supported by at least one source.',
+      vbarSVG(d.f1, 'Varieties in the CSC minutes by year, 2008 to 2025'),
+      { keyMain: 'Supported stress tolerance', keySec: 'Other varieties', html: figTable(['Year', 'Supported', 'Other', 'All'], d.f1.map(r => [r.label, r.a, r.b, r.a + r.b])) })
+    + figure('fig-2', 'Supported tolerance by stress', 'Of the ' + n(d.supTotal) + ' varieties with a supported stress tolerance, how many are supported for each stress; a variety can count under several stresses.',
+      hbarSVG(d.f2, 'stack', 'Varieties with a supported tolerance, by stress'),
+      { keyMain: 'Two or more sources', keySec: 'One source', html: figTable(['Stress', 'Two or more sources', 'One source', 'All'], d.f2.map(r => [r.label, r.a, r.b, r.a + r.b])) })
+    + figure('fig-3', 'Crops with the most stress-tolerant varieties', 'The 15 crops with the most varieties with a supported stress tolerance; the grey bar is every variety of that crop in the dataset.',
+      hbarSVG(d.f3, 'ref', 'The 15 crops with the most stress-tolerant varieties'),
+      { keyMain: 'Supported stress tolerance', keySec: 'All varieties of the crop', html: figTable(['Crop', 'Supported', 'All varieties'], d.f3.map(r => [r.label, r.a, r.total])) })
+    + figure('fig-4', 'Stress-tolerant varieties by state', 'Varieties with a supported stress tolerance recommended for each of the 15 states with the most (of ' + n(d.statesWith) + ' states); a variety recommended for several states counts in each.',
+      hbarSVG(d.f4, 'single', 'Stress-tolerant varieties by state, top 15'),
+      { keyMain: 'Varieties with a supported tolerance', keySec: '', html: figTable(['State', 'Varieties'], d.f4.map(r => [r.label, r.a])) });
+    return f2;
+  }
+
   function numbersTable(s) {
-    const o = s.outcome, ev = s.ev, eo = s.evOfficial;
     const minutesLinks = STATE.all.filter(r => httpUrl((r.raw.official_sources || {}).csc_minutes_url)).length;
     const rows = [
       ['Varieties in all', s.total],
-      ['In the CSC minutes held and notified on Seednet', s.src['CSC minutes and Seednet']],
-      ['In the CSC minutes held only', s.src['CSC minutes only']],
+      ['In the CSC minutes held', s.inCsc],
       ['Notified on Seednet only', s.src['Seednet only']],
-      ['CSC decision: approved', o.Approved],
-      ['CSC decision: deferred', o.Deferred],
-      ['CSC decision: rejected', o.Rejected],
-      ['CSC decision not stated in the minutes', o['Not stated']],
-      ['Years covered', s.yMin && s.yMax ? s.yMin + ' to ' + s.yMax : ''],
-      ['Researched on the web in August 2025', s.waveAug],
-      ['Researched on the web in October and November 2026', s.waveOct],
-      ['Official record only', s.notResearched],
-      ['Stress tolerance, two or more sources', ev['Two or more sources']],
-      ['Stress tolerance, one source', ev['One source']],
-      ['Stress tolerance claimed, not confirmed', ev['Claimed, not confirmed']],
-      ['Stress tolerance, none found', ev['None found']],
-      ['Stress tolerance not graded', ev['Not graded']],
-      ['Graded from official Seednet text alone, two or more sources', eo['Two or more sources']],
-      ['Graded from official Seednet text alone, one source', eo['One source']],
+      ['Researched on the web', s.researched],
+      ['Stress tolerance supported by two or more sources', s.ev['Two or more sources']],
+      ['Stress tolerance supported by one source', s.ev['One source']],
       ['Contact details of the developing institution available', s.withContact],
-      ['With a direct link to the CSC minutes (PDF)', minutesLinks],
-      ['With at least one publication that mentions the name', s.withPubs]
-    ].filter(r => r[1] !== '' && r[1] != null);
+      ['With a direct link to the CSC minutes (PDF)', minutesLinks]
+    ];
     return '<table class="numbers"><caption class="visually-hidden">The dataset in numbers</caption><tbody>'
-      + rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td class="num">' + esc(typeof r[1] === 'number' ? n(r[1]) : r[1]) + '</td></tr>').join('')
-      + '</tbody></table>';
+      + rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td class="num">' + n(r[1]) + '</td></tr>').join('') + '</tbody></table>';
   }
 
   function openAbout() {
@@ -1485,43 +1576,34 @@
     if (!STATE.modal.open) STATE.modal.lastFocus = document.activeElement;
     STATE.modal.open = true;
     const s = datasetStats();
-    const o = s.outcome;
-    const outcomeText = outcomeSentence(s);
+    const c = STATE.coverage || {};
+    const minutes = Array.isArray(c.minutes) ? c.minutes : [];
+    const read = minutes.filter(m => /^read/i.test(String(m.status || '')));
+    const ry = read.map(m => parseInt(m.year, 10)).filter(Number.isFinite);
+    const built = formatBuilt(STATE.meta.built);
+    const pageUrl = location.origin + location.pathname;
     setText('modal-title', 'About the data');
     $('modal-sub').hidden = true;
     $('modal-tabs').hidden = true; $('modal-tabs').innerHTML = '';
     const body = $('modal-body');
     body.removeAttribute('role'); body.removeAttribute('aria-labelledby');
     body.innerHTML = '<div class="about">'
-      + '<h3>What this is</h3>'
-      + '<p>This seed variety dashboard covers ' + n(s.total) + ' crop varieties across ' + n(s.crops) + ' crops and ' + n(s.states) + ' states and union territories. Each row is one variety, with its entry in the CSC minutes where there is one, its Seednet record where one exists, web research where it has been run, publications that mention it, and contact details of the developing institution. It is maintained by Precision Development (PxD).</p>'
-      + '<h3>The dataset in numbers</h3>' + numbersTable(s)
-      + '<p>Stress tolerance is one attribute among several and is shown only where there is evidence for it.</p>'
-      + '<h3>Where the data come from</h3>'
-      + '<ul>'
-      + '<li>The CSC meeting minutes (PDF files) give the variety, crop, meeting, decision and developing institution, and, where the minutes state them, parentage, breeding method and special traits. Every record drawn from the minutes names its source document and, where one was found, links to the PDF and an archived copy.</li>'
-      + '<li>Seednet (seednet.gov.in), the Government of India seed portal, gives the notification number and date, parentage, recommended ecology, yield and other official fields for the ' + n(s.seednet) + ' of ' + n(s.total) + ' varieties linked to a Seednet record.</li>'
-      + '<li>Google Scholar results, archived in 2025, and OpenAlex list works that mention the variety name; ' + n(s.withPubs) + ' of ' + n(s.total) + ' varieties have at least one. These are mentions, not necessarily studies of the variety.</li>'
-      + '<li>Institution websites and directories give the contact details of the developing institution, available for ' + n(s.withContact) + ' of ' + n(s.total) + ' varieties.</li>'
-      + '<li>Web research by language models, with cited sources, covers ' + n(s.researched) + ' of ' + n(s.total) + ' varieties; ' + n(s.waveAug) + ' were researched in August 2025 and ' + n(s.waveOct) + ' in October and November 2026. It covers stress tolerance, agronomy, genetics and breeding.</li>'
-      + '</ul>'
-      + '<h3>How the Seednet link is decided</h3>'
-      + '<p>A variety is linked to a Seednet record only when the crop is the same and the name is the same, including the variety number. Small spelling differences are accepted, and ' + n(s.seednetSpelling) + ' of the ' + n(s.seednet) + ' links rest on such a match. A fuzzy name match used in 2025 had linked some varieties to the Seednet record of a different variety; it was replaced in November 2026. For ' + n(s.differentVariety) + ' varieties the nearest Seednet entry is a different variety, and the record says so without using it.</p>'
+      + '<h3>What this is and who it is for</h3>'
+      + '<p>This register brings together the crop varieties of India that we could trace in the minutes of the Central Sub-Committee on Crop Standards, Notification and Release of Varieties (CSC) and in Seednet, the Government of India seed portal. Precision Development (PxD) built it to find stress-tolerant varieties that can be promoted with farmers: what each variety tolerates, where it is recommended, how well the claim is supported, and whom to contact about seed.</p>'
+      + '<h3>Where the data comes from</h3>'
+      + '<p>The CSC minutes give the variety, crop, meeting, decision and developing institution, and often parentage and special traits. Seednet gives the official notification, recommended ecology, yield and reaction to stress. For the researched varieties, language models searched the web and wrote summaries that cite their sources; a separate check counted the independent sources that name each variety. Publications that mention a variety come from Google Scholar and OpenAlex, and contact details from the websites and directories of the developing institutions.</p>'
+      + '<h3>What is covered and what is not</h3>'
+      + '<p>The register holds ' + n(s.total) + ' varieties. ' + n(s.inCsc) + ' come from ' + n(read.length) + (c.csc_documents_listed ? ' of the ' + n(c.csc_documents_listed) : '') + ' sets of CSC minutes' + (ry.length ? ' dated ' + Math.min.apply(null, ry) + ' to ' + Math.max.apply(null, ry) : '') + '; Coverage lists every set and the ones we do not hold. The other ' + n(s.src['Seednet only']) + ' are notified on Seednet but absent from the minutes we hold, so they have no CSC decision. '
+      + n(s.researched) + ' of the ' + n(s.total) + ' varieties have been researched on the web; the rest have the official record only, so a missing stress grade often means the variety has not been studied here, not that it lacks tolerance.</p>'
+      + '<p>"None found" means the searches found no statement of tolerance; it is not evidence that the variety lacks tolerance. "Not graded" means there was no web research and no official stress text to grade. A blank field means the source does not state the value.</p>'
+      + '<h3>The dataset in figures</h3>'
+      + aboutFigures()
+      + '<h4 class="numbers-h">The dataset in numbers</h4>' + numbersTable(s)
       + '<h3>How stress tolerance is graded</h3>'
-      + '<p>The research summary first gives a level for drought, heat, salinity, flood and submergence from its cited sources. A separate check then counts the independent sources that name the exact variety and support each claim. Two or more such sources give the grade "two or more sources", one gives "one source", and a claim with no such source is "claimed, not confirmed".</p>'
-      + '<p>Of all ' + n(s.total) + ' varieties, ' + n(s.ev['Two or more sources']) + ' are graded two or more sources, ' + n(s.ev['One source']) + ' one source, ' + n(s.ev['Claimed, not confirmed']) + ' claimed but not confirmed, and ' + n(s.ev['None found']) + ' none found; the other ' + n(s.ev['Not graded']) + ' are not graded. "Not graded" means the variety has had no web research and its official record has no stress text that could be graded. These are the counts the Stress evidence filter shows.'
-      + (s.officialGraded ? ' Of the graded varieties, ' + n(s.officialGraded) + ' have no web research and were graded from the official Seednet text alone; ' + n(s.officialGradedYes) + ' of them have a supported tolerance.' : '') + '</p>'
-      + '<p>"None found" means that the searches found no statement of tolerance; it is not evidence that the variety lacks tolerance, and not that the variety is susceptible. For ' + n(s.noteDisputes) + ' of the ' + n(s.supported) + ' varieties with a supported tolerance, the check left a note on the evidence; it is shown at the top of the Stress evidence tab and should be read before the grade is used.</p>'
-      + '<h3>Limitations</h3>'
-      + '<ul>'
-      + '<li>The research summaries were written by language models. They are leads to check against the linked sources, not official data, and some figures in them (yields in particular) are implausible.</li>'
-      + '<li>' + n(s.notResearched) + ' of ' + n(s.total) + ' varieties have the official record only; web research has not been run for them.</li>'
-      + '<li>The OpenAlex lookup is incomplete, so a variety with no listed publication may still have been studied.</li>'
-      + '<li>Contact details are for the developing institution, not always the individual breeder, and may be out of date.</li>'
-      + '<li>A blank field means the source does not state the value. It never means zero or none.</li>'
-      + '</ul>'
-      + '<h3>Data and code</h3>'
-      + '<p>The dataset, the pipeline and the documentation are in the repository linked as "Data and code" in the header.' + (formatBuilt(STATE.meta.built) ? ' This build of the data was compiled on ' + formatBuilt(STATE.meta.built) + '.' : '') + ' Each record has a permanent link, shown in its Record tab. A filtered view of the list can be shared by copying the address, and the address ending #all shows every variety.</p>'
+      + '<p>For drought, heat, salinity, flood and submergence, the research summary gives a level from its cited sources, and the official Seednet text is read for statements of tolerance. A separate check then counts the independent sources that name the exact variety and support each claim. Two or more such sources give the grade "two or more sources", one gives "one source", and a claim with no such source is "claimed, not confirmed". Each record shows the sources, the official text quoted and any note on the evidence.</p>'
+      + '<p>The research summaries were written by language models. They are leads to check against the linked sources, not official data, and some figures in them, yields in particular, are implausible.</p>'
+      + '<h3>How to cite and get the data</h3>'
+      + '<p>Please cite the register as Precision Development (2026), Seed Varieties of India' + (built ? ', data compiled ' + built : '') + ', at ' + linkHtml(pageUrl, pageUrl) + '. Each variety has a permanent link in its Record tab, and a filtered list can be shared by copying the address. Download CSV saves the list as currently filtered. The full dataset, the pipeline and the documentation are in the repository linked as Data and code.</p>'
       + '</div>';
     showModal(true);
   }
