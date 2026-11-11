@@ -222,6 +222,15 @@
     $('btn-error-dismiss').addEventListener('click', () => { $('error-banner').hidden = true; });
     $('btn-about').addEventListener('click', () => { location.hash = 'about'; });
     $('btn-coverage').addEventListener('click', () => { location.hash = 'coverage'; });
+    const themeBtn = $('btn-theme');
+    const syncTheme = () => { const dark = document.documentElement.getAttribute('data-theme') === 'dark'; themeBtn.textContent = dark ? 'Light' : 'Dark'; themeBtn.setAttribute('aria-pressed', String(dark)); themeBtn.setAttribute('aria-label', dark ? 'Switch to the light theme' : 'Switch to the dark theme'); };
+    themeBtn.addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('seed-theme', next); } catch (e) { /* storage unavailable */ }
+      syncTheme();
+    });
+    syncTheme();
     $('btn-reset').addEventListener('click', resetFilters);
     $('select-page-size').addEventListener('change', (e) => {
       STATE.page.size = parseInt(e.target.value, 10) || 25; STATE.page.index = 1; renderTable(); renderPagination();
@@ -252,7 +261,7 @@
     window.addEventListener('hashchange', route);
 
     const fd = $('filter-details');
-    if (fd && window.matchMedia('(min-width: 901px)').matches) fd.open = true;
+    if (fd && window.matchMedia('(min-width: 1101px)').matches) fd.open = true;
   }
 
   /* ------------------------------------------------------------------ *
@@ -613,17 +622,14 @@
 
   function renderIntro() {
     const s = datasetStats();
+    const so = s.src['Seednet only'];
+    const supported = s.ev['Two or more sources'] + s.ev['One source'];
     $('intro-text').textContent =
-      sourceSentence(s) + ' '
-      + (s.yMin && s.yMax ? 'Their years, the year of the CSC meeting or, for varieties found only on Seednet, the year of release, run from ' + s.yMin + ' to ' + s.yMax + '. ' : '')
-      + (outcomeSentence(s) ? outcomeSentence(s) + ' ' : '')
-      + 'Coverage is uneven. ' + n(s.researched) + ' of ' + n(s.total) + ' varieties have been researched on the web; the other ' + n(s.notResearched) + ' have the official record only. '
-      + stressSentence(s) + ' '
-      + 'Contact details of the developing institution are available for ' + n(s.withContact) + ' of ' + n(s.total) + ' varieties. '
-      + 'A blank cell means the source does not state the value; it never means zero or none.';
-    $('intro-note').innerHTML = esc('Open a row to see the full record, the contacts of the developing institution and the sources. '
-      + 'The research summaries were written by language models from web searches in August 2025 and in October and November 2026, and each cites its sources. They are leads to check against those sources, not official data.')
-      + (STATE.coverage ? ' See <a href="#coverage">Coverage</a> for the list of minutes held.' : '');
+      'This page lists ' + n(s.total) + ' crop varieties of India: ' + n(s.inCsc) + ' from the minutes of the Central Sub-Committee on Crop Standards (CSC) that we hold'
+      + (so ? ', and ' + n(so) + ' notified on Seednet only' : '') + '. '
+      + n(s.researched) + ' of them have been researched on the web, and ' + n(supported) + ' have a stress tolerance supported by at least one source naming the variety. '
+      + 'Blank cells mean the source does not state the value.';
+    $('intro-note').innerHTML = (STATE.coverage ? '<a href="#coverage">Coverage</a> · ' : '') + '<a href="#about">About the data</a>';
   }
 
   function updateResultCount() {
@@ -1071,10 +1077,9 @@
       return why ? 'For ' + STRESS_NAME[k].toLowerCase() + ', ' + why.charAt(0).toLowerCase() + why.slice(1).replace(/\.?$/, '.') : '';
     }).filter(Boolean);
     const note = [clean(r.stress_confirmation_note)].concat(adjusted).filter(Boolean).join(' ');
-    if (note) out += '<p class="caveat"><strong>Reviewer\'s caveat.</strong> ' + esc(note) + '</p>';
-    if (rec.researched && (r.research_refers_to === 'other_variety' || r.research_refers_to === 'mixed')) {
-      out += '<p class="caveat">Part of the research text may describe a similarly named variety.</p>';
-    }
+    const notes = row('Note on the evidence', note)
+      + (rec.researched && (r.research_refers_to === 'other_variety' || r.research_refers_to === 'mixed') ? row('Note on the research text', 'Part of the research text may describe a similarly named variety.') : '');
+    out += dl(notes);
 
     const VERDICT = {
       confirmed_multi_source: 'Supported by two or more independent sources naming the variety',
@@ -1414,6 +1419,38 @@
    * About dialog                                                       *
    * ------------------------------------------------------------------ */
 
+  function numbersTable(s) {
+    const o = s.outcome, ev = s.ev, eo = s.evOfficial;
+    const minutesLinks = STATE.all.filter(r => httpUrl((r.raw.official_sources || {}).csc_minutes_url)).length;
+    const rows = [
+      ['Varieties in all', s.total],
+      ['In the CSC minutes held and notified on Seednet', s.src['CSC minutes and Seednet']],
+      ['In the CSC minutes held only', s.src['CSC minutes only']],
+      ['Notified on Seednet only', s.src['Seednet only']],
+      ['CSC decision: approved', o.Approved],
+      ['CSC decision: deferred', o.Deferred],
+      ['CSC decision: rejected', o.Rejected],
+      ['CSC decision not stated in the minutes', o['Not stated']],
+      ['Years covered', s.yMin && s.yMax ? s.yMin + ' to ' + s.yMax : ''],
+      ['Researched on the web in August 2025', s.waveAug],
+      ['Researched on the web in October and November 2026', s.waveOct],
+      ['Official record only', s.notResearched],
+      ['Stress tolerance, two or more sources', ev['Two or more sources']],
+      ['Stress tolerance, one source', ev['One source']],
+      ['Stress tolerance claimed, not confirmed', ev['Claimed, not confirmed']],
+      ['Stress tolerance, none found', ev['None found']],
+      ['Stress tolerance not graded', ev['Not graded']],
+      ['Graded from official Seednet text alone, two or more sources', eo['Two or more sources']],
+      ['Graded from official Seednet text alone, one source', eo['One source']],
+      ['Contact details of the developing institution available', s.withContact],
+      ['With a direct link to the CSC minutes (PDF)', minutesLinks],
+      ['With at least one publication that mentions the name', s.withPubs]
+    ].filter(r => r[1] !== '' && r[1] != null);
+    return '<table class="numbers"><caption class="visually-hidden">The dataset in numbers</caption><tbody>'
+      + rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td class="num">' + esc(typeof r[1] === 'number' ? n(r[1]) : r[1]) + '</td></tr>').join('')
+      + '</tbody></table>';
+  }
+
   function openAbout() {
     STATE.modal.mode = 'about';
     STATE.modal.record = null;
@@ -1429,7 +1466,8 @@
     body.removeAttribute('role'); body.removeAttribute('aria-labelledby');
     body.innerHTML = '<div class="about">'
       + '<h3>What this is</h3>'
-      + '<p>This seed variety dashboard covers ' + n(s.total) + ' crop varieties across ' + n(s.crops) + ' crops and ' + n(s.states) + ' states and union territories. ' + esc(sourceSentence(s).replace(/^This page lists [\d,]+ crop varieties\. /, '')) + ' ' + esc(outcomeText) + ' Each row is one variety, with its entry in the CSC minutes, its Seednet record where one exists, web research where it has been run, publications that mention it, and contact details of the developing institution. It is maintained by Precision Development (PxD).</p>'
+      + '<p>This seed variety dashboard covers ' + n(s.total) + ' crop varieties across ' + n(s.crops) + ' crops and ' + n(s.states) + ' states and union territories. Each row is one variety, with its entry in the CSC minutes where there is one, its Seednet record where one exists, web research where it has been run, publications that mention it, and contact details of the developing institution. It is maintained by Precision Development (PxD).</p>'
+      + '<h3>The dataset in numbers</h3>' + numbersTable(s)
       + '<p>Stress tolerance is one attribute among several and is shown only where there is evidence for it.</p>'
       + '<h3>Where the data come from</h3>'
       + '<ul>'
@@ -1445,7 +1483,7 @@
       + '<p>The research summary first gives a level for drought, heat, salinity, flood and submergence from its cited sources. A separate check then counts the independent sources that name the exact variety and support each claim. Two or more such sources give the grade "two or more sources", one gives "one source", and a claim with no such source is "claimed, not confirmed".</p>'
       + '<p>Of all ' + n(s.total) + ' varieties, ' + n(s.ev['Two or more sources']) + ' are graded two or more sources, ' + n(s.ev['One source']) + ' one source, ' + n(s.ev['Claimed, not confirmed']) + ' claimed but not confirmed, and ' + n(s.ev['None found']) + ' none found; the other ' + n(s.ev['Not graded']) + ' are not graded. "Not graded" means the variety has had no web research and its official record has no stress text that could be graded. These are the counts the Stress evidence filter shows.'
       + (s.officialGraded ? ' Of the graded varieties, ' + n(s.officialGraded) + ' have no web research and were graded from the official Seednet text alone; ' + n(s.officialGradedYes) + ' of them have a supported tolerance.' : '') + '</p>'
-      + '<p>"None found" means that the searches found no statement of tolerance; it is not evidence that the variety lacks tolerance, and not that the variety is susceptible. For ' + n(s.noteDisputes) + ' of the ' + n(s.supported) + ' varieties with a supported tolerance, the reviewer of the check left a caveat; it is shown at the top of the Stress evidence tab and should be read before the grade is used.</p>'
+      + '<p>"None found" means that the searches found no statement of tolerance; it is not evidence that the variety lacks tolerance, and not that the variety is susceptible. For ' + n(s.noteDisputes) + ' of the ' + n(s.supported) + ' varieties with a supported tolerance, the check left a note on the evidence; it is shown at the top of the Stress evidence tab and should be read before the grade is used.</p>'
       + '<h3>Limitations</h3>'
       + '<ul>'
       + '<li>The research summaries were written by language models. They are leads to check against the linked sources, not official data, and some figures in them (yields in particular) are implausible.</li>'

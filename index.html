@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="light dark" />
+  <meta name="color-scheme" content="light" />
+  <script>try { document.documentElement.setAttribute('data-theme', localStorage.getItem('seed-theme') === 'dark' ? 'dark' : 'light'); } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }</script>
   <meta name="description" content="Seed variety dashboard of crop varieties considered by India's Central Sub-Committee on Crop Standards, Notification and Release of Varieties, with official records, contacts and research evidence." />
   <title>Seed Varieties of India</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css?v=20261110r18" />
+  <link rel="stylesheet" href="./style.css?v=20261110r20" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to the list of varieties</a>
@@ -18,12 +19,13 @@
         <img src="PxD_logo.png" alt="Precision Development" class="app-header__logo" />
         <div>
           <h1 class="app-header__title">Seed Varieties of India</h1>
-          <p class="app-header__subtitle">Seed variety dashboard: crop varieties considered by India's Central Sub-Committee on Crop Standards, 1975–2025, with official records, contacts and research evidence</p>
+          <p class="app-header__subtitle">Seed variety dashboard: official records, contacts and research evidence for crop varieties of India</p>
         </div>
       </div>
       <nav class="app-header__nav" aria-label="About this page">
         <button id="btn-coverage" class="nav-link" type="button" aria-haspopup="dialog" hidden>Coverage</button>
         <button id="btn-about" class="nav-link" type="button" aria-haspopup="dialog">About the data</button>
+        <button id="btn-theme" class="nav-link" type="button" aria-pressed="false">Dark</button>
         <a class="nav-link" href="https://github.com/kushal-satya/pxd-sts-dashboard" target="_blank" rel="noopener">Data and code</a>
       </nav>
     </div>
@@ -32,7 +34,7 @@
   <main id="main" class="container">
     <section class="intro" aria-label="About this dataset">
       <p id="intro-text">Loading the records.</p>
-      <p id="intro-note" class="muted"></p>
+      <p id="intro-note" class="intro-links"></p>
     </section>
 
     <div id="error-banner" class="error-banner" role="alert" hidden>
@@ -173,6 +175,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20261110r18" defer></script>
+  <script src="./script.js?v=20261110r20" defer></script>
 </body>
 </html>
