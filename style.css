@@ -120,6 +120,9 @@ p { margin: 0 0 10px; }
 .td-variety a:hover, .td-variety a:focus-visible { text-decoration: underline; }
 .td-year { white-space: nowrap; text-align: right; }
 .td-outcome { min-width: 7em; }
+.td-yield { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.th-yield .th-sort { justify-content: flex-end; }
+.td-disease, .td-pest { min-width: 10em; }
 .td-sources { min-width: 9em; }
 .td-stress { min-width: 12em; }
 .empty { text-align: center; padding: 32px 10px; color: var(--muted); }

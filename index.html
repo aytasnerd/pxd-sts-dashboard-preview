@@ -8,7 +8,7 @@
   <meta name="description" content="Seed variety dashboard of crop varieties considered by India's Central Sub-Committee on Crop Standards, Notification and Release of Varieties, with official records, contacts and research evidence." />
   <title>Seed Varieties of India</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css?v=20261110r32" />
+  <link rel="stylesheet" href="./style.css?v=20261111r2" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to the list of varieties</a>
@@ -51,6 +51,28 @@
             <div class="filter-group">
               <label for="filter-state">State or region</label>
               <select id="filter-state" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-disease-basis">Disease resistance</label>
+              <select id="filter-disease-basis" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-disease">Disease</label>
+              <input id="filter-disease" type="search" class="input" list="disease-list" placeholder="For example blast or wilt" autocomplete="off" />
+              <datalist id="disease-list"></datalist>
+            </div>
+            <div class="filter-group">
+              <label for="filter-pest-basis">Pest resistance</label>
+              <select id="filter-pest-basis" class="input"></select>
+            </div>
+            <div class="filter-group">
+              <label for="filter-pest">Pest</label>
+              <input id="filter-pest" type="search" class="input" list="pest-list" placeholder="For example stem borer" autocomplete="off" />
+              <datalist id="pest-list"></datalist>
+            </div>
+            <div class="filter-group">
+              <label for="filter-yield">Yield</label>
+              <select id="filter-yield" class="input"></select>
             </div>
             <div class="filter-group">
               <label for="filter-crop">Crop</label>
@@ -171,6 +193,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20261110r32" defer></script>
+  <script src="./script.js?v=20261111r2" defer></script>
 </body>
 </html>

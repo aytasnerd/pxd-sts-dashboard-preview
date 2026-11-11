@@ -27,7 +27,10 @@
     { key: 'sources', label: 'Source', title: 'Source of the record', optional: true },
     { key: 'seednet', label: 'Seednet record', optional: true },
     { key: 'institution', label: 'Developing institution', optional: true },
-    { key: 'pubs', label: 'Publications', optional: true }
+    { key: 'pubs', label: 'Publications', optional: true },
+    { key: 'disease', label: 'Disease resistance', optional: true },
+    { key: 'pest', label: 'Pest resistance', optional: true },
+    { key: 'yield', label: 'Yield (kg/ha, official)', title: 'Yield as published on Seednet, in kilograms per hectare', optional: true }
   ];
   const OUTCOMES = ['Approved', 'Deferred', 'Rejected', 'Not stated', 'Not in the CSC minutes held'];
   const SOURCES = ['CSC minutes and Seednet', 'CSC minutes only', 'Seednet only'];
@@ -46,16 +49,16 @@
   const SEEDNET_CONFIRMED = new Set(['confirmed_exact', 'confirmed_spelling']);
   const TABS = [
     { id: 'record', label: 'Record' },
-    { id: 'evidence', label: 'Stress evidence' },
+    { id: 'evidence', label: 'Stress and resistance' },
     { id: 'contacts', label: 'Contacts' },
     { id: 'sources', label: 'Publications and sources' }
   ];
   const SELECT_FILTERS = ['filter-crop', 'filter-state', 'filter-stress-type', 'filter-stress-evidence',
-    'filter-outcome', 'filter-source', 'filter-contact', 'filter-research', 'filter-seednet'];
+    'filter-outcome', 'filter-source', 'filter-contact', 'filter-research', 'filter-seednet', 'filter-disease-basis', 'filter-pest-basis', 'filter-yield'];
   // Filter state kept in the query string so a filtered view can be shared.
   const URL_KEYS = [['q', 'filter-search'], ['crop', 'filter-crop'], ['state', 'filter-state'], ['stress', 'filter-stress-type'],
     ['evidence', 'filter-stress-evidence'], ['outcome', 'filter-outcome'], ['source', 'filter-source'], ['institution', 'filter-institution'],
-    ['contact', 'filter-contact'], ['researched', 'filter-research'], ['seednet', 'filter-seednet'], ['from', 'filter-year-min'], ['to', 'filter-year-max'], ['minutes', 'filter-minutes']];
+    ['contact', 'filter-contact'], ['researched', 'filter-research'], ['seednet', 'filter-seednet'], ['from', 'filter-year-min'], ['to', 'filter-year-max'], ['minutes', 'filter-minutes'], ['disease_basis', 'filter-disease-basis'], ['disease', 'filter-disease'], ['pest_basis', 'filter-pest-basis'], ['pest', 'filter-pest'], ['yield', 'filter-yield']];
 
   const STATE_CODE_TO_NAME = {
     AP: 'Andhra Pradesh', AR: 'Arunachal Pradesh', AS: 'Assam', BR: 'Bihar',
@@ -255,6 +258,8 @@
     $('filter-search').addEventListener('input', debounce(applyFilters, 150));
     SELECT_FILTERS.forEach(id => $(id).addEventListener('change', applyFilters));
     $('filter-institution').addEventListener('input', debounce(applyFilters, 200));
+    $('filter-disease').addEventListener('input', debounce(applyFilters, 200));
+    $('filter-pest').addEventListener('input', debounce(applyFilters, 200));
     $('filter-year-min').addEventListener('input', debounce(applyFilters, 250));
     $('filter-year-max').addEventListener('input', debounce(applyFilters, 250));
 
@@ -378,9 +383,29 @@
     const pc = (Number(r.publications_scholar_count) || 0) + (Number(r.publications_openalex_count) || 0);
     rec.pubs = pc > 0 ? pc : null;
 
+    // Disease and pest resistance, and official yield.
+    const resist = (o, key, flag) => {
+      const x = (o && typeof o === 'object') ? o : {};
+      const lv = String(x.level || '').toLowerCase();
+      const names = uniq((Array.isArray(x[key]) ? x[key] : []).map(clean));
+      const q = (x.official_quote && typeof x.official_quote === 'object') ? x.official_quote : {};
+      return { level: ['official text', 'research', 'both'].indexOf(lv) !== -1 ? lv : '', has: !!flag || names.length > 0,
+        names: names, official: uniq((Array.isArray(x.official) ? x.official : []).map(clean)), research: uniq((Array.isArray(x.research) ? x.research : []).map(clean)),
+        quote: clean(q.quote), field: clean(q.field), summary: x.research_summary, sources: Array.isArray(x.sources) ? x.sources : [] };
+    };
+    rec.dis = resist(r.disease_resistance, 'diseases', r.has_disease_resistance);
+    rec.pest = resist(r.pest_resistance, 'pests', r.has_pest_resistance);
+    const ymin = Number(r.yield_kg_ha_min), ymax = Number(r.yield_kg_ha_max);
+    rec.yMin = Number.isFinite(ymin) && ymin > 0 ? ymin : null;
+    rec.yMax = Number.isFinite(ymax) && ymax > 0 ? ymax : rec.yMin;
+    rec.yText = clean(r.yield_text);
+    rec.yClass = ['top quarter for the crop', 'middle half', 'bottom quarter'].indexOf(r.yield_class) !== -1 ? r.yield_class : '';
+    rec.yHighOfficial = r.high_yield_stated_officially === true;
+
     rec.search = [rec.name, rec.crop, rec.states.join(' '), rec.institution, rec.stressText, rec.outcome,
       clean((r.csc_fields || {}).variety_code), clean(rec.seednetFields['Variety Name']), clean(r.key_attributes), clean(r.variety_name_as_printed),
-      Array.isArray(r.search_names) ? r.search_names.map(clean).join(' ') : clean(r.search_names)]
+      Array.isArray(r.search_names) ? r.search_names.map(clean).join(' ') : clean(r.search_names),
+      rec.dis.names.join(' '), rec.pest.names.join(' ')]
       .join(' ').toLowerCase();
     rec.skel = ' ' + skeleton(rec.search);
     rec.words = ' ' + rec.search.replace(/[^a-z0-9]+/g, ' ') + ' ';
@@ -429,7 +454,9 @@
       crops: uniqSorted(all.map(r => r.crop)),
       states: uniqSorted(all.flatMap(r => r.states)),
       stressTypes: uniqSorted(all.flatMap(r => r.stressTypes)),
-      institutions: uniqSorted(all.map(r => r.institution))
+      institutions: uniqSorted(all.map(r => r.institution)),
+      diseases: uniqSorted(all.flatMap(r => r.dis.names)),
+      pests: uniqSorted(all.flatMap(r => r.pest.names))
     };
   }
 
@@ -460,6 +487,14 @@
     fillSelect('filter-research', ['Yes', 'No'], ['Yes', 'Official record only']);
     fillSelect('filter-seednet', ['Linked', 'Not linked']);
     $('institution-list').innerHTML = v.institutions.map(i => '<option value="' + esc(i) + '"></option>').join('');
+    $('disease-list').innerHTML = v.diseases.map(d => '<option value="' + esc(d) + '"></option>').join('');
+    $('pest-list').innerHTML = v.pests.map(d => '<option value="' + esc(d) + '"></option>').join('');
+    const basisOpts = (pick) => [['official', 'Stated in official text', r => pick(r).level === 'official text' || pick(r).level === 'both'],
+      ['research', 'Stated in research', r => pick(r).level === 'research' || pick(r).level === 'both'], ['either', 'Either', r => pick(r).has]];
+    [['filter-disease-basis', r => r.dis], ['filter-pest-basis', r => r.pest]].forEach(([id, pick]) => {
+      const o = basisOpts(pick); fillSelect(id, o.map(x => x[0]), o.map(x => x[1] + ' (' + n(count(x[2])) + ')'));
+    });
+    fillSelect('filter-yield', ['top', 'official'], ['Top quarter for the crop (' + n(count(r => r.yClass === 'top quarter for the crop')) + ')', 'Stated as high yielding in official text (' + n(count(r => r.yHighOfficial)) + ')']);
     const years = STATE.all.map(r => r.year).filter(Boolean);
     if (years.length) {
       $('filter-year-min').placeholder = 'From ' + Math.min.apply(null, years);
@@ -478,16 +513,25 @@
       ev = val('filter-stress-evidence'), oc = val('filter-outcome'), contact = val('filter-contact'),
       res = val('filter-research'), sn = val('filter-seednet'), source = val('filter-source');
     const inst = ($('filter-institution').value || '').trim().toLowerCase();
+    const squash = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const disB = val('filter-disease-basis'), pestB = val('filter-pest-basis'), yf = val('filter-yield');
+    const disQ = squash($('filter-disease').value), pestQ = squash($('filter-pest').value);
+    const basisOk = (x, b) => !b || (b === 'official' ? (x.level === 'official text' || x.level === 'both') : b === 'research' ? (x.level === 'research' || x.level === 'both') : x.has);
+    const nameOk = (x, q) => !q || x.names.some(nm => squash(nm).indexOf(q) !== -1);
+    if (disB || disQ) STATE.columns.disease = true;
+    if (pestB || pestQ) STATE.columns.pest = true;
+    if (yf) STATE.columns.yield = true;
     const yMin = parseInt($('filter-year-min').value, 10), yMax = parseInt($('filter-year-max').value, 10);
 
     // Exact matching first; the spelling-tolerant match is used only when nothing matches exactly.
-    const runFilter = (fuzzy) => STATE.all.filter(r => {
+    const runFilter = (fuzzy, searchOnly) => STATE.all.filter(r => {
       for (let i = 0; i < tokens.length; i++) {
         // Short or numeric tokens ("co", "51") must be whole words; longer ones may match anywhere.
         if (shortTok[i] ? r.words.indexOf(' ' + shortTok[i] + ' ') !== -1 : r.search.indexOf(tokens[i]) !== -1) continue;
         if (fuzzy && skelTokens[i] && r.skel.indexOf(' ' + skelTokens[i]) !== -1) continue;
         return false;
       }
+      if (searchOnly) return true;
       if (crop && r.crop !== crop) return false;
       if (st && r.states.indexOf(st) === -1) return false;
       if (stype && r.stressTypes.indexOf(stype) === -1) return false;
@@ -499,6 +543,10 @@
       if (res && (r.researched ? 'Yes' : 'No') !== res) return false;
       if (sn && (r.hasSeednet ? 'Linked' : 'Not linked') !== sn) return false;
       if (inst && r.institution.toLowerCase().indexOf(inst) === -1) return false;
+      if (!basisOk(r.dis, disB) || !nameOk(r.dis, disQ)) return false;
+      if (!basisOk(r.pest, pestB) || !nameOk(r.pest, pestQ)) return false;
+      if (yf === 'top' && r.yClass !== 'top quarter for the crop') return false;
+      if (yf === 'official' && !r.yHighOfficial) return false;
       if (Number.isFinite(yMin) || Number.isFinite(yMax)) {
         if (!r.year) return false;
         if (Number.isFinite(yMin) && r.year < yMin) return false;
@@ -508,8 +556,16 @@
     });
     STATE.filtered = runFilter(false);
     if (!STATE.filtered.length && skelTokens.some(Boolean)) STATE.filtered = runFilter(true);
+    // A search that finds nothing inside the current filters is run over every variety, and the page says so.
+    STATE.searchedAll = false;
+    if (!STATE.filtered.length && tokens.length) {
+      STATE.filtered = runFilter(false, true);
+      if (!STATE.filtered.length && skelTokens.some(Boolean)) STATE.filtered = runFilter(true, true);
+      STATE.searchedAll = STATE.filtered.length > 0;
+    }
     STATE.page.index = 1;
     STATE.sorted = null;
+    renderColumnsMenu(); renderTableHead();
     renderTable(); renderPagination(); updateResultCount(); updateFilterSummary();
     syncUrl();
   }
@@ -546,7 +602,7 @@
 
   function activeFilterCount() {
     let c = SELECT_FILTERS.filter(id => $(id).value).length;
-    ['filter-search', 'filter-institution', 'filter-year-min', 'filter-year-max', 'filter-minutes'].forEach(id => { if (($(id).value || '').trim()) c++; });
+    ['filter-search', 'filter-institution', 'filter-year-min', 'filter-year-max', 'filter-minutes', 'filter-disease', 'filter-pest'].forEach(id => { if (($(id).value || '').trim()) c++; });
     return c;
   }
   function updateFilterSummary() {
@@ -556,7 +612,7 @@
 
   function resetFilters() {
     SELECT_FILTERS.forEach(id => { $(id).value = ''; });
-    ['filter-search', 'filter-institution', 'filter-year-min', 'filter-year-max', 'filter-minutes'].forEach(id => { $(id).value = ''; });
+    ['filter-search', 'filter-institution', 'filter-year-min', 'filter-year-max', 'filter-minutes', 'filter-disease', 'filter-pest'].forEach(id => { $(id).value = ''; });
     STATE.sort = { key: 'crop', dir: 'asc' };
     STATE.sorted = null;
     renderTableHead();
@@ -635,16 +691,21 @@
     const period = (cy.length ? 'CSC minutes of ' + Math.min.apply(null, cy) + ' to ' + Math.max.apply(null, cy) : 'CSC minutes')
       + (sy.length ? '; Seednet notifications from ' + Math.min.apply(null, sy) : '');
     const facts = [['Period covered', period], ['Sources', 'CSC minutes, Seednet, published research'],
-      ['Stresses', 'Drought, heat, salinity, flood, submergence'], ['Updated', formatBuilt(STATE.meta.built)]];
+      ['Stresses', 'Drought, heat, salinity, flood, submergence; disease and pest resistance'], ['Updated', formatBuilt(STATE.meta.built)]];
     $('facts').innerHTML = facts.filter(f => f[1]).map(f => '<div><dt>' + esc(f[0]) + '</dt><dd>' + esc(f[1]) + '</dd></div>').join('');
   }
 
   const FILTER_NAMES = [['filter-search', 'search'], ['filter-crop', 'crop'], ['filter-state', 'state'], ['filter-stress-type', 'stress type'],
     ['filter-stress-evidence', 'stress evidence'], ['filter-outcome', 'CSC decision'], ['filter-source', 'source'], ['filter-institution', 'institution'],
-    ['filter-contact', 'contact details'], ['filter-research', 'web research'], ['filter-seednet', 'Seednet record'], ['filter-year-min', 'year from'], ['filter-year-max', 'year to']];
+    ['filter-disease-basis', 'disease resistance'], ['filter-disease', 'disease'], ['filter-pest-basis', 'pest resistance'], ['filter-pest', 'pest'], ['filter-yield', 'yield'], ['filter-contact', 'contact details'], ['filter-research', 'web research'], ['filter-seednet', 'Seednet record'], ['filter-year-min', 'year from'], ['filter-year-max', 'year to']];
   function updateResultCount() {
     const el = $('result-count');
     if (!STATE.all.length) { el.textContent = 'No varieties loaded.'; return; }
+    if (STATE.searchedAll) {
+      el.innerHTML = 'Nothing in the current filters matches this search, so it was run over all varieties. <a href="#" id="summary-clear">Clear</a>';
+      $('summary-clear').addEventListener('click', (e) => { e.preventDefault(); resetFilters(); $('filter-search').focus(); });
+      return;
+    }
     if (isDefaultView()) {
       el.innerHTML = 'Showing varieties with a stress tolerance supported by at least one source. <a href="#all" id="default-clear">Show all varieties.</a>';
       return;
@@ -713,6 +774,9 @@
       case 'seednet': return r.hasSeednet ? 'Linked' : '';
       case 'institution': return r.institution;
       case 'pubs': return r.pubs ? n(r.pubs) : '';
+      case 'disease': return r.dis.names.length ? r.dis.names.join(', ') : (r.dis.has ? 'stated' : '');
+      case 'pest': return r.pest.names.length ? r.pest.names.join(', ') : (r.pest.has ? 'stated' : '');
+      case 'yield': return r.yMin ? (r.yMax && r.yMax !== r.yMin ? n(r.yMin) + '\u2013' + n(r.yMax) : n(r.yMin)) : '';
       default: return '';
     }
   }
@@ -721,6 +785,9 @@
     switch (key) {
       case 'year': return r.year;
       case 'pubs': return r.pubs;
+      case 'yield': return r.yMax;
+      case 'disease': return r.dis.names.length ? r.dis.names.join(', ') : (r.dis.has ? 'stated' : null);
+      case 'pest': return r.pest.names.length ? r.pest.names.join(', ') : (r.pest.has ? 'stated' : null);
       case 'stress': return r.stressRank === 4 ? null : r.stressRank;
       case 'outcome': return r.outcome === 'Not stated' ? null : OUTCOMES.indexOf(r.outcome);
       case 'sources': return SOURCES.indexOf(r.source);
@@ -1077,6 +1144,7 @@
       + relatedBlock
       + quickContact
       + (rec.seednetOnly ? '' : section('Official record (CSC minutes)', dl(cscRows)))
+      + yieldBlock(rec)
       + seednetBlock
       + section('Genetics and breeding', genetics, rec.researched ? 'Research text was written by a language model; check it against the cited sources.' : '');
 
@@ -1089,6 +1157,29 @@
     /* ---------- Publications and sources tab ---------- */
     rec.view.sources = buildPublications(rec) + buildSourceList(rec, src) + buildAboutRecord(rec, far, r);
     return rec.view;
+  }
+
+  // Disease or pest resistance as plain rows: names, basis, the official clause, the research text and its sources.
+  function yieldBlock(rec) {
+    if (!rec.yMin && !rec.yText && !rec.yHighOfficial) return '';
+    const range = rec.yMin ? (rec.yMax && rec.yMax !== rec.yMin ? n(rec.yMin) + ' to ' + n(rec.yMax) : n(rec.yMin)) + ' kg/ha' : '';
+    const cls = { 'top quarter for the crop': 'top quarter', 'middle half': 'middle half', 'bottom quarter': 'bottom quarter' }[rec.yClass];
+    const rows = row('Official yield', range) + row('As printed', rec.yText)
+      + row('Compared with the crop', cls ? 'In the ' + cls + ' of ' + (rec.crop ? rec.crop.toLowerCase() : 'its crop\'s') + ' varieties with an official yield.' : '')
+      + row('Described as high yielding', rec.yHighOfficial ? 'Yes, in the official text.' : '');
+    return section('Yield (official)', dl(rows));
+  }
+
+  function resistanceSection(title, namesLabel, x, src, legacy) {
+    const basis = { 'official text': 'Stated in the official text', 'research': 'Stated in the research summary', 'both': 'Stated in the official text and in the research summary' }[x.level] || '';
+    const summary = rclean(x.summary) || rclean((legacy || {}).summary);
+    const rows = row(namesLabel, x.names.join(', ') || (x.has ? 'Stated, without naming the ' + namesLabel.toLowerCase() : ''))
+      + row('Basis', basis)
+      + rowHtml('Official text', x.quote ? '\u201c' + esc(deshout(x.quote)) + '\u201d' + (x.field ? ' <span class="note">(' + esc(/^Seednet:/i.test(x.field) ? 'Seednet, ' + x.field.replace(/^Seednet:\s*/i, '').toLowerCase() : x.field.toLowerCase()) + ')</span>' : '') : '')
+      + row('What the research says', summary)
+      + sourceRows(src, src.nums(x.sources));
+    if (!x.has && !summary) return '';
+    return section(title, dl(rows));
   }
 
   function buildEvidence(rec, far, rd, sf, src) {
@@ -1156,13 +1247,10 @@
       out += p('The research found nothing on drought, heat, salinity, flood or submergence for this variety.', 'note');
     }
     const official = row('Reaction to stress (Seednet)', deshout(clean(sf['Reaction to Stress'])))
-      + row('Reaction to major diseases (Seednet)', deshout(clean(sf['Reaction to Major Diseases'])))
-      + row('Reaction to major pests (Seednet)', deshout(clean(sf['Reaction to Major Pests'])))
       + row('Special traits (CSC minutes)', (r.csc_fields || {}).special_traits);
     out += section('Official statements', dl(official));
-    const dis = rclean((stFar.disease_resistance || {}).summary) || rclean((stOld.disease_resistance || {}).summary);
-    const pest = rclean((stFar.pest_resistance || {}).summary) || rclean((stOld.pest_resistance || {}).summary);
-    out += section('Disease and pest resistance (research summary)', dl(row('Disease resistance', dis) + row('Pest resistance', pest)));
+    out += resistanceSection('Disease resistance', 'Diseases', rec.dis, src, stFar.disease_resistance || stOld.disease_resistance);
+    out += resistanceSection('Pest resistance', 'Pests', rec.pest, src, stFar.pest_resistance || stOld.pest_resistance);
 
     if (rec.researched) {
       const ap = (far.agronomic_performance && typeof far.agronomic_performance === 'object') ? far.agronomic_performance : {};
@@ -1483,7 +1571,15 @@
     const statesWith = byState.size;
     const f4 = Array.from(byState.entries()).map(([label, a]) => ({ label: label, a: a })).sort((x, y) => y.a - x.a || x.label.localeCompare(y.label)).slice(0, 15);
     const cscRange = csc.filter(r => r.year >= 2008 && r.year <= 2025);
-    return { f1, f2, f3, f4, supTotal: sup.length, cscRangeTotal: cscRange.length, cscRangeSup: cscRange.filter(isSupported).length, statesWith: statesWith };
+    const dz = new Map();
+    all.filter(r => r.dis.has).forEach(r => r.dis.names.forEach(nm => {
+      const o = dz.get(nm) || { label: nm, a: 0, b: 0 };
+      if (r.dis.official.indexOf(nm) !== -1) o.a++; else o.b++;
+      dz.set(nm, o);
+    }));
+    const f5 = Array.from(dz.values()).sort((x, y) => (y.a + y.b) - (x.a + x.b) || x.label.localeCompare(y.label)).slice(0, 12);
+    const disTotal = all.filter(r => r.dis.has).length;
+    return { f1, f2, f3, f4, f5, disTotal, supTotal: sup.length, cscRangeTotal: cscRange.length, cscRangeSup: cscRange.filter(isSupported).length, statesWith: statesWith };
   }
 
   function hbarSVG(rows, mode, ariaLabel) {
@@ -1550,7 +1646,10 @@
       { keyMain: 'Supported stress tolerance', keySec: 'All varieties of the crop', html: figTable(['Crop', 'Supported', 'All varieties'], d.f3.map(r => [r.label, r.a, r.total])) })
     + figure('fig-4', 'Stress-tolerant varieties by state', 'Varieties with a supported stress tolerance recommended for each of the 15 states with the most (of ' + n(d.statesWith) + ' states); a variety recommended for several states counts in each.',
       hbarSVG(d.f4, 'single', 'Stress-tolerant varieties by state, top 15'),
-      { keyMain: 'Varieties with a supported tolerance', keySec: '', html: figTable(['State', 'Varieties'], d.f4.map(r => [r.label, r.a])) });
+      { keyMain: 'Varieties with a supported tolerance', keySec: '', html: figTable(['State', 'Varieties'], d.f4.map(r => [r.label, r.a])) })
+    + figure('fig-5', 'Varieties with disease resistance, 12 most common diseases', 'Of the ' + n(d.disTotal) + ' varieties with a stated disease resistance, how many are resistant to each of the 12 most common diseases; a variety can count under several diseases.',
+      hbarSVG(d.f5, 'stack', 'Varieties with disease resistance, 12 most common diseases'),
+      { keyMain: 'Stated in the official text', keySec: 'Stated in research only', html: figTable(['Disease', 'Official text', 'Research only', 'All'], d.f5.map(r => [r.label, r.a, r.b, r.a + r.b])) });
     return f2;
   }
 
@@ -1602,6 +1701,8 @@
       + '<h3>How stress tolerance is graded</h3>'
       + '<p>For drought, heat, salinity, flood and submergence, the research summary gives a level from its cited sources, and the official Seednet text is read for statements of tolerance. A separate check then counts the independent sources that name the exact variety and support each claim. Two or more such sources give the grade "two or more sources", one gives "one source", and a claim with no such source is "claimed, not confirmed". Each record shows the sources, the official text quoted and any note on the evidence.</p>'
       + '<p>The research summaries were written by language models. They are leads to check against the linked sources, not official data, and some figures in them, yields in particular, are implausible.</p>'
+      + '<h3>How disease and pest resistance and yield are read</h3>'
+      + '<p>Disease and pest resistance are read by rules from the official Seednet text (reaction to major diseases and pests) and from the research summaries, and disease names are matched to a common list; each record says which source states the resistance and quotes the official clause. The yield class compares a variety\'s official Seednet yield with other varieties of the same crop, for crops with at least 20 official yields: the top quarter, the middle half or the bottom quarter.</p>'
       + '<h3>How to cite and get the data</h3>'
       + '<p>Please cite the register as Precision Development (2026), Seed Varieties of India' + (built ? ', data compiled ' + built : '') + ', at ' + linkHtml(pageUrl, pageUrl) + '. Each variety has a permanent link in its Record tab, and a filtered list can be shared by copying the address. Download CSV saves the list as currently filtered. The full dataset, the pipeline and the documentation are in the repository linked as Data and code.</p>'
       + '</div>';
