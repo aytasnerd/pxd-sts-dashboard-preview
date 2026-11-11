@@ -20,9 +20,9 @@
   const COLUMNS = [
     { key: 'crop', label: 'Crop' },
     { key: 'variety', label: 'Variety', alwaysVisible: true },
-    { key: 'year', label: 'Year considered' },
-    { key: 'outcome', label: 'Outcome' },
-    { key: 'sources', label: 'Sources' },
+    { key: 'year', label: 'Year', title: 'Year considered by the CSC, or year of release for varieties on Seednet only' },
+    { key: 'outcome', label: 'Decision', title: 'Decision of the CSC' },
+    { key: 'sources', label: 'Source', title: 'Source of the record' },
     { key: 'stress', label: 'Stress tolerance' },
     { key: 'states', label: 'States' },
     { key: 'seednet', label: 'Seednet record', optional: true },
@@ -626,35 +626,32 @@
   }
 
   function renderIntro() {
-    const s = datasetStats();
-    const so = s.src['Seednet only'];
-    const supported = s.ev['Two or more sources'] + s.ev['One source'];
-    $('intro-text').textContent =
-      'This page lists ' + n(s.total) + ' crop varieties of India: ' + n(s.inCsc) + ' from the minutes of the Central Sub-Committee on Crop Standards (CSC) that we hold'
-      + (so ? ', and ' + n(so) + ' notified on Seednet only' : '') + '. '
-      + n(s.researched) + ' of them have been researched on the web, and ' + n(supported) + ' have a stress tolerance supported by at least one source naming the variety. '
-      + 'Blank cells mean the source does not state the value; ';
-    $('intro-text').innerHTML = esc($('intro-text').textContent) + (STATE.coverage ? '<a href="#coverage">Coverage</a> lists the minutes we hold, and ' : '') + '<a href="#about">About the data</a> explains the sources and gives the full counts.';
-    $('intro-note').hidden = true;
+    $('intro-text').innerHTML = 'A register of crop varieties of India, drawn from the minutes of the Central Sub-Committee on Crop Standards and from Seednet, with official records, contacts of the developing institutions and research evidence on stress tolerance. '
+      + 'Open a variety to see its record and sources; ' + (STATE.coverage ? '<a href="#coverage">Coverage</a> lists the minutes held and ' : '') + '<a href="#about">About the data</a> explains the sources and their limits.';
   }
 
+  const FILTER_NAMES = [['filter-search', 'search'], ['filter-crop', 'crop'], ['filter-state', 'state'], ['filter-stress-type', 'stress type'],
+    ['filter-stress-evidence', 'stress evidence'], ['filter-outcome', 'CSC decision'], ['filter-source', 'source'], ['filter-institution', 'institution'],
+    ['filter-contact', 'contact details'], ['filter-research', 'web research'], ['filter-seednet', 'Seednet record'], ['filter-year-min', 'year from'], ['filter-year-max', 'year to']];
   function updateResultCount() {
-    const total = STATE.all.length, shown = STATE.filtered.length;
     const el = $('result-count');
-    if (total && isDefaultView()) {
-      const both = STATE.filtered.filter(r => r.source === 'CSC minutes and Seednet').length;
-      el.innerHTML = 'Showing the ' + n(shown) + ' varieties that have web research, of ' + n(total) + ' in all (' + n(both) + ' of them are in both the CSC minutes and Seednet). '
-        + '<a href="#all" id="default-clear">Show all ' + n(total) + ' varieties.</a>';
+    if (!STATE.all.length) { el.textContent = 'No varieties loaded.'; return; }
+    if (isDefaultView()) {
+      el.innerHTML = 'Showing varieties that have web research. <a href="#all" id="default-clear">Show all varieties.</a>';
       return;
     }
+    const parts = FILTER_NAMES.map(([id, label]) => {
+      const e = $(id); const v = (e.value || '').trim(); if (!v) return '';
+      const shown = e.tagName === 'SELECT' ? (e.options[e.selectedIndex] ? e.options[e.selectedIndex].text.replace(/\s*\([\d,]+\)$/, '') : v) : v;
+      return label + ' (' + shown + ')';
+    }).filter(Boolean);
     const mk = $('filter-minutes').value;
-    if (total && mk && STATE.minutesByKey.has(mk)) {
-      el.innerHTML = 'Showing ' + n(shown) + ' of ' + n(total) + ' varieties, limited to those from ' + esc(minutesName(STATE.minutesByKey.get(mk))) + '. <a href="#" id="minutes-clear">Show all minutes again</a>.';
-      $('minutes-clear').addEventListener('click', (e) => { e.preventDefault(); $('filter-minutes').value = ''; applyFilters(); });
-      return;
-    }
-    el.textContent = !total ? 'No varieties loaded.' : 'Showing ' + n(shown) + ' of ' + n(total) + ' varieties';
+    if (mk && STATE.minutesByKey.has(mk)) parts.push('minutes (' + minutesName(STATE.minutesByKey.get(mk)).replace(/^the minutes of the /, '') + ')');
+    if (!parts.length) { el.textContent = 'Showing all varieties.'; return; }
+    el.innerHTML = 'Filtered by ' + esc(listJoin(parts)) + '. <a href="#" id="summary-clear">Clear</a>';
+    $('summary-clear').addEventListener('click', (e) => { e.preventDefault(); resetFilters(); $('filter-search').focus(); });
   }
+
 
   /* ------------------------------------------------------------------ *
    * Table                                                              *
@@ -676,7 +673,7 @@
     thead.innerHTML = '<tr>' + COLUMNS.filter(c => STATE.columns[c.key]).map(c => {
       const sorted = STATE.sort.key === c.key;
       const aria = sorted ? (STATE.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
-      return '<th scope="col" aria-sort="' + aria + '" class="th-' + c.key + '"><button type="button" class="th-sort" data-key="' + esc(c.key) + '">'
+      return '<th scope="col" aria-sort="' + aria + '" class="th-' + c.key + '"' + (c.title ? ' title="' + esc(c.title) + '"' : '') + '><button type="button" class="th-sort" data-key="' + esc(c.key) + '">'
         + esc(c.label) + '<span class="th-sort__ind" aria-hidden="true">' + (sorted ? (STATE.sort.dir === 'asc' ? ' ↑' : ' ↓') : '') + '</span></button></th>';
     }).join('') + '</tr>';
     thead.querySelectorAll('.th-sort').forEach(b => b.addEventListener('click', () => {
@@ -774,7 +771,8 @@
     if (STATE.page.index > pages) STATE.page.index = pages;
     const first = total ? (STATE.page.index - 1) * STATE.page.size + 1 : 0;
     const last = Math.min(total, STATE.page.index * STATE.page.size);
-    setText('page-info', total ? 'Rows ' + n(first) + ' to ' + n(last) + ' of ' + n(total) : 'No rows');
+    const info = total ? 'Rows ' + n(first) + ' to ' + n(last) + ' of ' + n(total) : 'No rows';
+    setText('page-info', info); setText('page-info-top', info);
     $('btn-prev').disabled = STATE.page.index <= 1;
     $('btn-next').disabled = STATE.page.index >= pages;
   }
@@ -989,7 +987,7 @@
     // Prominent contact lines on the record tab.
     const contact = buildContacts(rec, src);
     const quickContact = contact.quick
-      ? section('Contact', dl(contact.quick), 'The full contact details of the developing institution are under Contacts.')
+      ? section('Contact', dl(contact.quick), 'Full details are under Contacts.')
       : '';
 
     const minutesPage = httpUrl(os_.csc_minutes_list_page);
@@ -1058,7 +1056,7 @@
     const related = (Array.isArray(r.related_record_ids) ? r.related_record_ids : []).map(id => STATE.bySlug.get(String(id))).filter(x => x && x !== rec);
     const relatedBlock = related.length ? section('Related records', '<ul class="related">' + related.map(x =>
       '<li><a href="#' + esc(x.slug) + '">' + esc(x.name) + '</a>' + esc([x.crop ? ', ' + x.crop.toLowerCase() : '', x.year ? ', ' + (x.seednetOnly ? 'released ' : 'considered ') + x.year : '', x.seednetOnly ? ', Seednet only' : (x.outcome !== 'Not stated' ? ', ' + x.outcome.toLowerCase() : '')].join('')) + '</li>').join('') + '</ul>',
-      'Other records in the dataset for what appears to be the same variety, for example the same variety considered at another meeting.') : '';
+      'Other records that appear to be the same variety.') : '';
     const nq = String(r.name_quality || 'ok').toLowerCase();
     if (nq && nq !== 'ok') sentences.push('The name in the minutes is incomplete or generic; it could not be linked to other sources.');
     rec.view.subtitle = subtitle;
@@ -1068,7 +1066,7 @@
       + quickContact
       + (rec.seednetOnly ? '' : section('Official record (CSC minutes)', dl(cscRows)))
       + seednetBlock
-      + section('Genetics and breeding', genetics, rec.researched ? 'Fields the sources do not state are left out. Text from the research summary was written by a language model and should be checked against the cited sources.' : 'Fields the sources do not state are left out.');
+      + section('Genetics and breeding', genetics, rec.researched ? 'Research text was written by a language model; check it against the cited sources.' : '');
 
     /* ---------- Stress evidence tab ---------- */
     rec.view.evidence = buildEvidence(rec, far, rd, sf, src);
@@ -1087,23 +1085,20 @@
     const stOld = rd.stress_tolerance_detailed || {};
     const sc = r.stress_confirmation || {};
     const levels = r.stress_levels_gemini || {};
+    const basisRaw = clean(r.stress_basis).toLowerCase();
+    const basis = basisRaw === 'research and official text' ? 'the research summary and the official Seednet text'
+      : (basisRaw === 'official text only' || (!basisRaw && !rec.researched && rec.graded)) ? 'the official Seednet text alone' : '';
     let lead;
     if (rec.evidence === 'Two or more sources' || rec.evidence === 'One source') {
-      lead = 'The independent-source check supports ' + rec.stressText.replace(/^./, c => c.toLowerCase()) + '.';
+      lead = 'The independent-source check supports ' + rec.stressText.replace(/^./, c => c.toLowerCase()) + (basis ? ', on the evidence of ' + basis : '') + '.';
     } else if (rec.evidence === 'Claimed, not confirmed') {
       lead = 'The research summary claims tolerance of ' + listJoin(rec.typesClaimed.map(t => t.toLowerCase())) + ', but no independent source naming this variety supports the claim.';
     } else if (rec.evidence === 'None found') {
-      lead = rec.researched
-        ? 'Neither the research summary nor the official record reports tolerance of drought, heat, salinity, flood or submergence for this variety. This means none was found, not that the variety is susceptible.'
-        : 'The official record reports no tolerance of drought, heat, salinity, flood or submergence for this variety. This means none was found, not that the variety is susceptible.';
+      lead = (rec.researched ? 'Neither the research summary nor the official record reports' : 'The official record reports no') + ' tolerance of drought, heat, salinity, flood or submergence; this does not mean the variety is susceptible.';
     } else {
       lead = 'This variety has not been researched on the web, and its official record has not been graded for stress tolerance.';
     }
-    const basisRaw = clean(r.stress_basis).toLowerCase();
-    const basisText = { 'research and official text': 'The grade draws on the research summary and on the official Seednet text.', 'official text only': 'The grade rests on the official Seednet text alone, because web research has not been run for this variety.' }[basisRaw]
-      || (!basisRaw && !rec.researched && rec.graded ? 'The grade rests on the official Seednet text alone, because web research has not been run for this variety.' : '');
-    let out = '<div class="summary"><p>' + esc(lead) + '</p>'
-      + (basisText ? '<p>' + esc(basisText) + '</p>' : '') + '</div>';
+    let out = '<div class="summary"><p>' + esc(lead) + '</p></div>';
     const adjusted = STRESS_KEYS.map(k => {
       const c = sc[k];
       const why = c && typeof c === 'object' ? clean(c.verdict_adjusted_reason) : '';
@@ -1144,7 +1139,7 @@
     });
     if (blocks.length) {
       out += section('Tolerance by stress', blocks.join('') + (none.length && rec.researched ? p('The research found nothing on ' + listJoin(none) + '.', 'note') : ''),
-        rec.researched ? 'The level comes from the research summary, written by a language model. The check counts the independent sources that name this exact variety.' : '');
+        rec.researched ? 'Levels come from the research summary; the check counts sources that name this variety.' : '');
     } else if (rec.researched) {
       out += p('The research found nothing on drought, heat, salinity, flood or submergence for this variety.', 'note');
     }
@@ -1169,7 +1164,7 @@
         + row('Farmer adoption', rclean(ap.farmer_adoption));
       const nums = src.nums(ap.evidence_sources);
       out += section('Agronomy (research summary)', dl(agr ? agr + sourceRows(src, nums) : ''),
-        'These figures come from the research summary, written by a language model, and have not been checked against the sources. Official figures, where Seednet gives them, are in the Record tab.');
+        'From the research summary, not checked against the sources; official figures are in the Record tab.');
     }
     return out;
   }
@@ -1242,7 +1237,7 @@
     const has = cd.has;
     const full = has
       ? section('Developing institution', dl(rows + sourceRows(src, nums)),
-        'Contact details are for the developing institution, taken from its own website and directories, and may be out of date. Fields the sources do not state are left out.')
+        'From the institution\'s own website and directories; details may be out of date.')
       : section('Developing institution', dl(rows) + p('The sources searched give no contact details for this institution.', 'note'));
     const quick = row('Institution', institution)
       + rowHtml('Email', lines(emails.slice(0, 3), mail) + (emails.length > 3 ? '<span class="line note">and ' + (emails.length - 3) + ' more under Contacts</span>' : ''))
@@ -1287,7 +1282,7 @@
     const fmt = (w) => '<li>' + (w.authors ? esc(w.authors) + ' ' : '') + (w.year ? '(' + w.year + '). ' : (w.authors ? '(no date). ' : ''))
       + (w.url ? linkHtml(w.url, w.title) : esc(w.title)) + (/[.?!…]$/.test(w.title) ? '' : '.') + (w.venue ? ' ' + esc(w.venue.replace(/\.$/, '')) + (/…$/.test(w.venue) ? '' : '.') : '') + '</li>';
     const total = (Number(r.publications_scholar_count) || 0) + (Number(r.publications_openalex_count) || 0);
-    const lead = 'Works whose title, abstract or search snippet contains the variety name, from Google Scholar (searched in 2025) and OpenAlex. A mention is not necessarily a study of this variety.';
+    const lead = 'Works that mention the variety name (Google Scholar 2025, OpenAlex); a mention is not a study.';
     if (!works.length) return section('Publications', p('The searches found no work that mentions this variety name.', 'note'), esc(lead));
     const head = works.slice(0, 10).map(fmt).join('');
     const rest = works.slice(10).map(fmt).join('');
@@ -1303,7 +1298,7 @@
     const head = items.slice(0, 15).join(''); const rest = items.slice(15).join('');
     let html = '<ol class="refs">' + head + '</ol>';
     if (rest) html += '<details class="more"><summary>Show ' + (items.length - 15) + ' more sources</summary><ol class="refs" start="16">' + rest + '</ol></details>';
-    return section('Sources (' + src.list.length + ')', html, 'Every web source cited anywhere in this record, numbered once. The numbers in the other tabs refer to this list.');
+    return section('Sources (' + src.list.length + ')', html, 'Every web source cited in this record, numbered once; other tabs refer to these numbers.');
   }
 
   function buildAboutRecord(rec, far, r) {

@@ -8,7 +8,7 @@
   <meta name="description" content="Seed variety dashboard of crop varieties considered by India's Central Sub-Committee on Crop Standards, Notification and Release of Varieties, with official records, contacts and research evidence." />
   <title>Seed Varieties of India</title>
   <link rel="icon" href="PxD_logo.png" type="image/png" />
-  <link rel="stylesheet" href="./style.css?v=20261110r24" />
+  <link rel="stylesheet" href="./style.css?v=20261110r28" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to the list of varieties</a>
@@ -32,11 +32,6 @@
   </header>
 
   <main id="main" class="container">
-    <section class="intro" aria-label="About this dataset">
-      <p id="intro-text">Loading the records.</p>
-      <p id="intro-note" class="intro-links"></p>
-    </section>
-
     <div id="error-banner" class="error-banner" role="alert" hidden>
       <p class="error-banner__title">The data could not be loaded.</p>
       <p class="error-banner__detail" id="error-banner-detail"></p>
@@ -49,10 +44,6 @@
         <details id="filter-details" class="filters">
           <summary id="filter-summary">Filter the list</summary>
           <div class="filters__body">
-            <div class="filter-group">
-              <label for="filter-search">Search</label>
-              <input id="filter-search" type="search" class="input" placeholder="Variety, crop, state or institution" autocomplete="off" />
-            </div>
             <div class="filter-group">
               <label for="filter-crop">Crop</label>
               <select id="filter-crop" class="input"></select>
@@ -70,7 +61,7 @@
               <select id="filter-stress-evidence" class="input"></select>
             </div>
             <div class="filter-group">
-              <label for="filter-outcome">Outcome</label>
+              <label for="filter-outcome">CSC decision</label>
               <select id="filter-outcome" class="input"></select>
             </div>
             <div class="filter-group">
@@ -95,7 +86,7 @@
               <select id="filter-seednet" class="input"></select>
             </div>
             <fieldset class="filter-group filter-group--year">
-              <legend>Year considered</legend>
+              <legend>Year</legend>
               <div class="filter-year-row">
                 <label class="visually-hidden" for="filter-year-min">From year</label>
                 <input id="filter-year-min" type="number" class="input" placeholder="From" inputmode="numeric" />
@@ -111,20 +102,24 @@
       </aside>
 
       <div class="results">
-        <div class="result-bar">
-          <p id="result-count" class="result-bar__count" aria-live="polite">Loading the records.</p>
-          <p id="data-compiled" class="result-bar__meta"></p>
+        <section class="intro" aria-label="About this page">
+          <p id="intro-text">A register of crop varieties of India, drawn from the minutes of the Central Sub-Committee on Crop Standards and from Seednet, with official records, contacts of the developing institutions and research evidence on stress tolerance.</p>
+        </section>
+
+        <div class="search-row">
+          <label for="filter-search">Search varieties</label>
+          <input id="filter-search" type="search" class="input input--search" placeholder="Variety name, alias, crop, state or institution" autocomplete="off" />
         </div>
 
         <div class="table-controls">
+          <p id="result-count" class="result-summary" aria-live="polite">Loading the records.</p>
           <div class="table-controls__group">
             <div class="dropdown" id="columns-wrap">
               <button id="btn-columns" type="button" class="btn" aria-haspopup="true" aria-expanded="false" aria-controls="columns-menu">Columns</button>
               <div id="columns-menu" class="dropdown__menu" role="group" aria-label="Columns shown in the list" hidden></div>
             </div>
             <button id="btn-export-csv" type="button" class="btn">Download CSV</button>
-          </div>
-          <div class="table-controls__group">
+            <span id="page-info-top" class="page-info"></span>
             <label for="select-page-size">Rows per page</label>
             <select id="select-page-size" class="input input--narrow">
               <option value="25" selected>25</option>
@@ -145,7 +140,7 @@
 
         <nav class="pagination" aria-label="Pages of the list">
           <button id="btn-prev" type="button" class="btn" disabled>Previous page</button>
-          <span id="page-info" class="pagination__info">Page 1 of 1</span>
+          <span id="page-info" class="pagination__info page-info"></span>
           <button id="btn-next" type="button" class="btn" disabled>Next page</button>
         </nav>
       </div>
@@ -153,7 +148,7 @@
   </main>
 
   <footer class="app-footer">
-    <p>Compiled by Precision Development. Sources and methods are described under "About the data".</p>
+    <p>Compiled by Precision Development. <span id="data-compiled"></span> Sources and methods are described under <a href="#about">About the data</a>.</p>
   </footer>
 
   <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite">
@@ -175,6 +170,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20261110r24" defer></script>
+  <script src="./script.js?v=20261110r28" defer></script>
 </body>
 </html>
