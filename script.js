@@ -22,6 +22,7 @@
     { key: 'variety', label: 'Variety', alwaysVisible: true },
     { key: 'year', label: 'Year considered' },
     { key: 'outcome', label: 'Outcome' },
+    { key: 'sources', label: 'Sources' },
     { key: 'stress', label: 'Stress tolerance' },
     { key: 'states', label: 'States' },
     { key: 'seednet', label: 'Seednet record', optional: true },
@@ -30,7 +31,7 @@
   ];
   const OUTCOMES = ['Approved', 'Deferred', 'Rejected', 'Not stated', 'Not in the CSC minutes held'];
   const SOURCES = ['CSC minutes and Seednet', 'CSC minutes only', 'Seednet only'];
-  const DEFAULT_VIEW = { crop: 'Rice', researched: 'Yes' };
+  const DEFAULT_VIEW = { researched: 'Yes' };
   const STRESS_KEYS = ['drought', 'heat', 'salinity', 'flood', 'submergence'];
   const STRESS_NAME = { drought: 'Drought', heat: 'Heat', salinity: 'Salinity', salt: 'Salinity', flood: 'Flood', submergence: 'Submergence' };
   const EVIDENCE_LABEL = {
@@ -261,7 +262,13 @@
     window.addEventListener('hashchange', route);
 
     const fd = $('filter-details');
-    if (fd && window.matchMedia('(min-width: 1101px)').matches) fd.open = true;
+    if (fd) {
+      const wide = window.matchMedia('(min-width: 900px)');
+      const syncRail = () => { if (wide.matches) fd.open = true; };
+      syncRail();
+      if (wide.addEventListener) wide.addEventListener('change', syncRail);
+      fd.querySelector('summary').addEventListener('click', (e) => { if (wide.matches) e.preventDefault(); });
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -528,12 +535,10 @@
     history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
   }
   function applyDefaultView() {
-    if (STATE.meta.vocab.crops.indexOf(DEFAULT_VIEW.crop) === -1) return;
-    $('filter-crop').value = DEFAULT_VIEW.crop;
     $('filter-research').value = DEFAULT_VIEW.researched;
   }
   function isDefaultView() {
-    return $('filter-crop').value === DEFAULT_VIEW.crop && $('filter-research').value === DEFAULT_VIEW.researched && activeFilterCount() === 2;
+    return $('filter-research').value === DEFAULT_VIEW.researched && activeFilterCount() === 1;
   }
 
   function activeFilterCount() {
@@ -628,16 +633,18 @@
       'This page lists ' + n(s.total) + ' crop varieties of India: ' + n(s.inCsc) + ' from the minutes of the Central Sub-Committee on Crop Standards (CSC) that we hold'
       + (so ? ', and ' + n(so) + ' notified on Seednet only' : '') + '. '
       + n(s.researched) + ' of them have been researched on the web, and ' + n(supported) + ' have a stress tolerance supported by at least one source naming the variety. '
-      + 'Blank cells mean the source does not state the value.';
-    $('intro-note').innerHTML = (STATE.coverage ? '<a href="#coverage">Coverage</a> · ' : '') + '<a href="#about">About the data</a>';
+      + 'Blank cells mean the source does not state the value; ';
+    $('intro-text').innerHTML = esc($('intro-text').textContent) + (STATE.coverage ? '<a href="#coverage">Coverage</a> lists the minutes we hold, and ' : '') + '<a href="#about">About the data</a> explains the sources and gives the full counts.';
+    $('intro-note').hidden = true;
   }
 
   function updateResultCount() {
     const total = STATE.all.length, shown = STATE.filtered.length;
     const el = $('result-count');
     if (total && isDefaultView()) {
-      el.innerHTML = 'Showing the ' + n(shown) + ' ' + esc(DEFAULT_VIEW.crop.toLowerCase()) + ' varieties that have web research, of '
-        + n(total) + ' varieties in all. <a href="#all" id="default-clear">Clear the filters</a> to see every crop.';
+      const both = STATE.filtered.filter(r => r.source === 'CSC minutes and Seednet').length;
+      el.innerHTML = 'Showing the ' + n(shown) + ' varieties that have web research, of ' + n(total) + ' in all (' + n(both) + ' of them are in both the CSC minutes and Seednet). '
+        + '<a href="#all" id="default-clear">Show all ' + n(total) + ' varieties.</a>';
       return;
     }
     const mk = $('filter-minutes').value;
@@ -693,6 +700,7 @@
       case 'variety': return r.name.replace(/-/g, '\u2011');
       case 'year': return r.year ? String(r.year) : '';
       case 'outcome': return r.outcome === 'Not stated' ? '' : r.outcome;
+      case 'sources': return r.source;
       case 'stress': return r.stressText;
       case 'states': return statesText(r);
       case 'seednet': return r.hasSeednet ? 'Linked' : '';
@@ -708,6 +716,7 @@
       case 'pubs': return r.pubs;
       case 'stress': return r.stressRank === 4 ? null : r.stressRank;
       case 'outcome': return r.outcome === 'Not stated' ? null : OUTCOMES.indexOf(r.outcome);
+      case 'sources': return SOURCES.indexOf(r.source);
       case 'source': return SOURCES.indexOf(r.source);
       case 'states': return r.states.length ? r.states.join(', ') : null;
       case 'seednet': return r.hasSeednet ? 0 : null;
@@ -763,7 +772,9 @@
   function renderPagination() {
     const total = STATE.filtered.length, pages = Math.max(1, Math.ceil(total / STATE.page.size));
     if (STATE.page.index > pages) STATE.page.index = pages;
-    setText('page-info', 'Page ' + n(STATE.page.index) + ' of ' + n(pages));
+    const first = total ? (STATE.page.index - 1) * STATE.page.size + 1 : 0;
+    const last = Math.min(total, STATE.page.index * STATE.page.size);
+    setText('page-info', total ? 'Rows ' + n(first) + ' to ' + n(last) + ' of ' + n(total) : 'No rows');
     $('btn-prev').disabled = STATE.page.index <= 1;
     $('btn-next').disabled = STATE.page.index >= pages;
   }
@@ -852,6 +863,18 @@
     body.setAttribute('role', 'tabpanel');
     body.setAttribute('aria-labelledby', 'tab-' + STATE.modal.tab);
     body.innerHTML = rec.view[STATE.modal.tab];
+    body.querySelectorAll('.src-ref').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const k = a.dataset.src;
+      selectTab('sources', false);
+      const li = $('src-' + k);
+      if (!li) return;
+      const d = li.closest('details'); if (d) d.open = true;
+      li.classList.add('is-target');
+      li.setAttribute('tabindex', '-1');
+      li.scrollIntoView({ block: 'center' });
+      li.focus({ preventScroll: true });
+    }));
   }
 
   // Definition-list helpers. Rows with blank values are omitted.
@@ -909,9 +932,16 @@
     (ic.source_urls || []).forEach(add);
     return { list: list, add: add, nums: (urls) => uniq((urls || []).map(add).filter(Boolean)).sort((a, b) => a - b) };
   }
-  function sourceRef(nums) {
+  // Sources as links: the first two titles go straight to the source; every number
+  // opens the Publications and sources tab at that entry.
+  function srcNumLink(k) { return '<a href="#" class="src-ref" data-src="' + k + '">' + k + '</a>'; }
+  function sourceRows(src, nums) {
     if (!nums.length) return '';
-    return (nums.length === 1 ? 'Source ' : 'Sources ') + listJoin(nums.map(String)) + ' in the list under Publications and sources.';
+    const titles = nums.slice(0, 2).map(k => { const u = src.list[k - 1]; return u ? linkHtml(u, sourceTitle(u).title) : ''; }).filter(Boolean);
+    const more = nums.length - titles.length;
+    const first = titles.join('; ') + (more > 0 ? ' and <a href="#" class="src-ref" data-src="' + nums[2] + '">' + more + ' more</a>' : '');
+    const numbers = (nums.length === 1 ? 'Number ' : 'Numbers ') + listJoin(nums.map(srcNumLink)) + ' in the source list.';
+    return rowHtml('Sources', '<span class="line">' + first + '</span><span class="line note">' + numbers + '</span>');
   }
 
   function buildView(rec) {
@@ -943,7 +973,10 @@
       sentences.push(consider);
       if (rec.hasSeednet && (notifNo || notifDate)) sentences.push('Seednet records its notification' + notifText + '.');
     }
-    sentences.push({ 'CSC minutes and Seednet': 'The record draws on the CSC minutes and on Seednet.', 'CSC minutes only': 'The record draws on the CSC minutes only; no matching Seednet record was linked.', 'Seednet only': '' }[rec.source]);
+    sentences.push({ 'CSC minutes and Seednet': 'The record draws on the CSC minutes and on Seednet.', 'CSC minutes only': 'The record draws on the CSC minutes only.', 'Seednet only': '' }[rec.source]);
+    const seednetLine = rec.hasSeednet && rec.seednetUrl
+      ? '<p>Linked to its ' + linkHtml(rec.seednetUrl, 'Seednet record') + '.</p>'
+      : (rec.hasSeednet ? '<p>Linked to its Seednet record.</p>' : '<p>No Seednet record is linked.</p>');
     const snYear = parseInt(clean(sf['Year of Release']), 10);
     if (!rec.seednetOnly && rec.year && Number.isFinite(snYear) && snYear > 1900 && snYear !== rec.year) {
       sentences.push('The year in the list (' + rec.year + ') is the year the CSC considered the variety; Seednet gives ' + snYear + ' as the year of release.');
@@ -1018,7 +1051,7 @@
       : '';
     const genNums = src.nums(gq.evidence_sources);
     const genetics = (genOfficial ? '<h4>From the official record</h4>' + dl(genOfficial) : '')
-      + (genResearch ? '<h4>From the research summary</h4>' + dl(genResearch) + p(sourceRef(genNums), 'note') : '');
+      + (genResearch ? '<h4>From the research summary</h4>' + dl(genResearch + sourceRows(src, genNums)) : '');
 
     const printed = clean(r.variety_name_as_printed);
     if (printed && printed !== rec.name) sentences.push('Printed in the source as ' + printed + '.');
@@ -1029,7 +1062,7 @@
     const nq = String(r.name_quality || 'ok').toLowerCase();
     if (nq && nq !== 'ok') sentences.push('The name in the minutes is incomplete or generic; it could not be linked to other sources.');
     rec.view.subtitle = subtitle;
-    rec.view.record = '<div class="summary">' + sentences.filter(Boolean).map(s => '<p>' + esc(s) + '</p>').join('') + '</div>'
+    rec.view.record = '<div class="summary">' + sentences.filter(Boolean).map(s => '<p>' + esc(s) + '</p>').join('') + seednetLine + '</div>'
       + '<p class="permalink">Permanent link to this record: <a href="#' + esc(rec.slug) + '">#' + esc(rec.slug) + '</a></p>'
       + relatedBlock
       + quickContact
@@ -1106,7 +1139,7 @@
         + row('Independent-source check', verdict ? verdict + (nSrc > 1 ? ' (' + nSrc + ' counted)' : '') + '.' : '')
         + row('How it was checked', conf ? rclean(conf.basis) : '')
         + row('What the research says', details)
-        + row('Cited sources', nums.length ? listJoin(nums.map(String)) + ' (see Publications and sources)' : '');
+        + sourceRows(src, nums);
       if (rows) blocks.push('<h4>' + esc(STRESS_NAME[k]) + '</h4>' + dl(rows)); else none.push(STRESS_NAME[k].toLowerCase());
     });
     if (blocks.length) {
@@ -1135,7 +1168,7 @@
         + row('Field trials', firstResearch(ap.field_trials, ad.field_trials, ap.field_trial_results))
         + row('Farmer adoption', rclean(ap.farmer_adoption));
       const nums = src.nums(ap.evidence_sources);
-      out += section('Agronomy (research summary)', dl(agr) + p(sourceRef(nums), 'note'),
+      out += section('Agronomy (research summary)', dl(agr ? agr + sourceRows(src, nums) : ''),
         'These figures come from the research summary, written by a language model, and have not been checked against the sources. Official figures, where Seednet gives them, are in the Record tab.');
     }
     return out;
@@ -1208,7 +1241,7 @@
     const nums = src.nums([].concat(cs.contact_source_urls || [], ic.source_urls || [], bc.evidence_sources || []));
     const has = cd.has;
     const full = has
-      ? section('Developing institution', dl(rows) + p(sourceRef(nums), 'note'),
+      ? section('Developing institution', dl(rows + sourceRows(src, nums)),
         'Contact details are for the developing institution, taken from its own website and directories, and may be out of date. Fields the sources do not state are left out.')
       : section('Developing institution', dl(rows) + p('The sources searched give no contact details for this institution.', 'note'));
     const quick = row('Institution', institution)
@@ -1266,7 +1299,7 @@
 
   function buildSourceList(rec, src) {
     if (!src.list.length) return section('Sources', p(rec.researched ? 'The research summary for this variety cites no web sources.' : 'Web research has not been run for this variety, so no web sources are listed. The official record comes from the CSC minutes named in the Record tab.', 'note'));
-    const items = src.list.map(u => { const s = sourceTitle(u); return '<li>' + linkHtml(u, s.title) + (s.host ? ', ' + esc(s.host) : '') + '.</li>'; });
+    const items = src.list.map((u, i) => { const s = sourceTitle(u); return '<li id="src-' + (i + 1) + '">' + linkHtml(u, s.title) + (s.host ? ', ' + esc(s.host) : '') + '.</li>'; });
     const head = items.slice(0, 15).join(''); const rest = items.slice(15).join('');
     let html = '<ol class="refs">' + head + '</ol>';
     if (rest) html += '<details class="more"><summary>Show ' + (items.length - 15) + ' more sources</summary><ol class="refs" start="16">' + rest + '</ol></details>';
@@ -1502,7 +1535,12 @@
    * Modal shell                                                        *
    * ------------------------------------------------------------------ */
 
+  function markNav() {
+    const mode = STATE.modal.open ? STATE.modal.mode : '';
+    [['btn-about', 'about'], ['btn-coverage', 'coverage']].forEach(([id, m]) => { const el = $(id); if (!el) return; if (mode === m) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
+  }
   function showModal(focus) {
+    markNav();
     const m = $('detail-modal');
     const wasHidden = m.hidden;
     m.hidden = false;
@@ -1515,6 +1553,7 @@
     $('detail-modal').hidden = true;
     document.body.classList.remove('modal-open');
     STATE.modal.open = false; STATE.modal.record = null; STATE.modal.mode = 'variety';
+    markNav();
     if (!fromRoute) setHash('');
     const f = STATE.modal.lastFocus;
     STATE.modal.lastFocus = null;
